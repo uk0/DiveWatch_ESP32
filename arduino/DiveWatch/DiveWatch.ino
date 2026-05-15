@@ -108,6 +108,14 @@ uint8_t  g_editHH          = 12;
 uint8_t  g_editMM          = 0;
 uint32_t g_lastTimeSaveMs  = 0;
 
+// Power saving: dim OLED after idle period
+static const uint32_t SCREEN_OFF_MS = 5UL * 60UL * 1000UL;  // 5 min
+uint32_t g_lastInteractMs  = 0;
+bool     g_screenOff       = false;
+
+// Lifetime stats (separate from per-dive log, also in NVS)
+uint32_t g_lifetimeUnderwaterSec = 0;
+
 // ================== Moving-average filter ============================
 float    g_pressBuf[AVG_WINDOW] = {0};
 uint8_t  g_pressBufIdx          = 0;
@@ -260,7 +268,7 @@ void btnPoll(Button &b, uint32_t now) {
 }
 
 // ================== UI pages =========================================
-enum Page : uint8_t { PAGE_HUD = 0, PAGE_TISSUE, PAGE_LASTDIVE, PAGE_LOG, PAGE_COUNT };
+enum Page : uint8_t { PAGE_HUD = 0, PAGE_TISSUE, PAGE_LASTDIVE, PAGE_LOG, PAGE_STATS, PAGE_COUNT };
 uint8_t g_page = PAGE_HUD;
 uint8_t g_logViewIdx = 0;
 
@@ -274,9 +282,10 @@ float      g_diveMinTemp = 999;
 
 void loadLogFromNVS() {
   prefs.begin("dive", true);
-  g_logCount      = prefs.getUChar("count", 0);
-  g_diveTotal     = prefs.getUShort("total", 0);
-  g_diveTotalMaxD = prefs.getFloat("totalMaxD", 0);
+  g_logCount             = prefs.getUChar("count", 0);
+  g_diveTotal            = prefs.getUShort("total", 0);
+  g_diveTotalMaxD        = prefs.getFloat("totalMaxD", 0);
+  g_lifetimeUnderwaterSec = prefs.getULong("uwSec", 0);
   if (g_logCount > LOG_CAP) g_logCount = LOG_CAP;
   for (uint8_t i = 0; i < g_logCount; i++) {
     char key[8];
@@ -294,11 +303,13 @@ void saveDiveToNVS(const DiveRecord &rec) {
   g_log[0] = rec;
   g_diveTotal++;
   if (rec.maxDepth > g_diveTotalMaxD) g_diveTotalMaxD = rec.maxDepth;
+  g_lifetimeUnderwaterSec += rec.durationSec;
 
   prefs.begin("dive", false);
   prefs.putUChar("count", g_logCount);
   prefs.putUShort("total", g_diveTotal);
   prefs.putFloat("totalMaxD", g_diveTotalMaxD);
+  prefs.putULong("uwSec", g_lifetimeUnderwaterSec);
   for (uint8_t i = 0; i < g_logCount; i++) {
     char key[8];
     snprintf(key, sizeof(key), "r%u", i);
@@ -314,6 +325,7 @@ void eraseLogNVS() {
   g_logCount = 0;
   g_diveTotal = 0;
   g_diveTotalMaxD = 0;
+  g_lifetimeUnderwaterSec = 0;
 }
 
 // ================== Real-time clock ==================================
@@ -436,87 +448,103 @@ float depthFromPressure(float pressureMbar) {
   return d < 0 ? 0 : d;
 }
 
-// ================== Drawing ==========================================
+// ================== Drawing (中文 UI) ================================
+// 字体说明:
+//   u8g2_font_wqy12_t_chinese1  -> 12px 中文(约1000常用字), 含ASCII
+//   u8g2_font_logisoso28_tn     -> 大字数字(深度)
+//   u8g2_font_logisoso24_tn     -> 中字数字(时间编辑)
+#define FONT_CN     u8g2_font_wqy12_t_chinese1
+#define FONT_BIG    u8g2_font_logisoso28_tn
+#define FONT_MID    u8g2_font_logisoso24_tn
+
 void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm, uint32_t diveSec) {
   u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_6x10_tr);
+  u8g2.setFont(FONT_CN);
 
-  // Top left: current real-time clock HH:MM
-  char buf[24];
+  char buf[40];
   uint8_t hh, mm, ss;
   getCurrentTime(hh, mm, ss);
-  snprintf(buf, sizeof(buf), "%02u:%02u", hh, mm);
-  u8g2.drawStr(0, 8, buf);
 
-  // Top center: dive timer (only when actively diving)
+  // 顶部左: 实时时钟 HH:MM
+  snprintf(buf, sizeof(buf), "%02u:%02u", hh, mm);
+  u8g2.drawUTF8(0, 10, buf);
+
+  // 顶部中: 潜水计时(仅潜水中显示)
   if (g_diving) {
     snprintf(buf, sizeof(buf), "[%02lu:%02lu]", (unsigned long)(diveSec / 60), (unsigned long)(diveSec % 60));
-    int w = u8g2.getStrWidth(buf);
-    u8g2.drawStr((128 - w) / 2 - 6, 8, buf);
+    int w = u8g2.getUTF8Width(buf);
+    u8g2.drawUTF8((128 - w) / 2, 10, buf);
   }
 
-  // Top right: battery icon + pct + salinity flag
+  // 顶部右: 电池图标 + 百分比 + 海/淡水标识
   if (g_batPresent) {
-    drawBatteryIcon(78, 1);
+    drawBatteryIcon(74, 2);
     snprintf(buf, sizeof(buf), "%d%%", g_batPct);
-    u8g2.drawStr(98, 8, buf);
+    u8g2.drawUTF8(94, 10, buf);
   }
-  u8g2.drawStr(120, 8, g_fluidDensity > 1010 ? "S" : "F");
+  u8g2.drawUTF8(116, 10, g_fluidDensity > 1010 ? "海" : "淡");
 
-  // Big depth
+  // 大字深度(居中)
   if (depth < 100.0f) snprintf(buf, sizeof(buf), "%4.1f", depth);
   else                snprintf(buf, sizeof(buf), "%4.0f", depth);
-  u8g2.setFont(u8g2_font_logisoso28_tn);
+  u8g2.setFont(FONT_BIG);
   int dw = u8g2.getStrWidth(buf);
-  u8g2.drawStr((128 - dw) / 2, 38, buf);
+  u8g2.drawStr((128 - dw) / 2, 42, buf);
 
-  // Mid row: NDL
-  u8g2.setFont(u8g2_font_6x10_tr);
+  // 中部: NDL / 安全停留 / 减压
+  u8g2.setFont(FONT_CN);
   if (g_ss == SS_RUNNING || g_ss == SS_ARMED) {
     uint32_t remain = (g_ssAccumMs >= SAFETY_STOP_SEC * 1000UL) ? 0 : (SAFETY_STOP_SEC * 1000UL - g_ssAccumMs);
-    snprintf(buf, sizeof(buf), "SAFETY %lus", (unsigned long)(remain / 1000));
-    u8g2.drawStr(0, 50, buf);
+    snprintf(buf, sizeof(buf), "安全停%lu秒", (unsigned long)(remain / 1000));
+    u8g2.drawUTF8(0, 54, buf);
   } else if (g_ss == SS_DONE) {
-    u8g2.drawStr(0, 50, "SS OK");
+    u8g2.drawUTF8(0, 54, "安全停留完成");
   } else if (ndl >= 99.0f) {
-    u8g2.drawStr(0, 50, "NDL >99");
+    u8g2.drawUTF8(0, 54, "NDL>99分");
   } else if (ndl <= 0.0f) {
-    u8g2.drawStr(0, 50, "DECO!");
+    u8g2.drawUTF8(0, 54, "需减压!");
   } else {
-    snprintf(buf, sizeof(buf), "NDL %2.0fmin", ndl);
-    u8g2.drawStr(0, 50, buf);
+    snprintf(buf, sizeof(buf), "NDL %2.0f分", ndl);
+    u8g2.drawUTF8(0, 54, buf);
   }
 
-  // Bottom row: Max + Temp
-  snprintf(buf, sizeof(buf), "Mx %.1f %.1fC", maxDepth, temp);
-  u8g2.drawStr(0, 62, buf);
+  // 中部右: 最深
+  snprintf(buf, sizeof(buf), "最深%.1f", maxDepth);
+  int w = u8g2.getUTF8Width(buf);
+  u8g2.drawUTF8(128 - w - 8, 54, buf);
 
-  // Right edge: ascent + alarms
-  snprintf(buf, sizeof(buf), "%+.1f", ascentMpm);
-  int w = u8g2.getStrWidth(buf);
-  u8g2.drawStr(128 - w - 6, 62, buf);
-  if (depth > ALARM_DEPTH)          u8g2.drawStr(120, 50, "!");
-  if (ascentMpm > ASCENT_LIMIT_MPM) u8g2.drawStr(120, 62, "^");
+  // 底部: 温度 + 上升速率
+  snprintf(buf, sizeof(buf), "%.1f℃", temp);
+  u8g2.drawUTF8(0, 64, buf);
+
+  snprintf(buf, sizeof(buf), "%+.1f米/分", ascentMpm);
+  w = u8g2.getUTF8Width(buf);
+  u8g2.drawUTF8(128 - w - 8, 64, buf);
+
+  // 警告标志(右边缘)
+  if (depth > ALARM_DEPTH)          u8g2.drawUTF8(120, 54, "!");
+  if (ascentMpm > ASCENT_LIMIT_MPM) u8g2.drawUTF8(120, 64, "^");
 
   u8g2.sendBuffer();
 }
 
 void drawTissue(float depth) {
   u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_6x10_tr);
-  u8g2.drawStr(0, 8, "TISSUE LOAD");
+  u8g2.setFont(FONT_CN);
+  u8g2.drawUTF8(0, 10, "组织负荷");
 
   float pct = computeTissueLoadPct(depth);
   char buf[32];
-  snprintf(buf, sizeof(buf), "Max %3.0f%%", pct);
-  u8g2.drawStr(0, 22, buf);
+  snprintf(buf, sizeof(buf), "最大 %3.0f%%", pct);
+  int w = u8g2.getUTF8Width(buf);
+  u8g2.drawUTF8(128 - w, 10, buf);
 
-  // Bar graph: 16 compartments, height proportional to current load
+  // 16 房间柱状图
   int x0 = 0;
   int barW = 7;
   int gap  = 1;
-  int yTop = 28;
-  int hMax = 28;
+  int yTop = 14;
+  int hMax = 32;
   for (int i = 0; i < 16; i++) {
     float pAmb_bar = (g_surfacePressure / 1000.0f) + depth * g_fluidDensity * 9.80665f / 1e5f;
     float Mv = pAmb_bar / B_N2[i] + A_N2[i];
@@ -529,108 +557,138 @@ void drawTissue(float depth) {
     u8g2.drawBox(x, yTop + (hMax - h), barW, h);
   }
 
+  // 底部: NDL
   float ndl = computeNDL(depth);
-  if (ndl >= 99.0f)      snprintf(buf, sizeof(buf), "NDL >99 min");
-  else if (ndl <= 0.0f)  snprintf(buf, sizeof(buf), "DECO REQUIRED");
-  else                   snprintf(buf, sizeof(buf), "NDL %.0f min", ndl);
-  u8g2.drawStr(0, 62, buf);
+  if (ndl >= 99.0f)      snprintf(buf, sizeof(buf), "NDL >99 分");
+  else if (ndl <= 0.0f)  snprintf(buf, sizeof(buf), "需要减压");
+  else                   snprintf(buf, sizeof(buf), "NDL %.0f 分钟", ndl);
+  u8g2.drawUTF8(0, 64, buf);
   u8g2.sendBuffer();
 }
 
 void drawLastDive() {
   u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_6x10_tr);
-  u8g2.drawStr(0, 8, "LAST DIVE");
+  u8g2.setFont(FONT_CN);
+  u8g2.drawUTF8(0, 10, "上次潜水");
   char buf[32];
+  snprintf(buf, sizeof(buf), "累计%u次", g_diveTotal);
+  int w = u8g2.getUTF8Width(buf);
+  u8g2.drawUTF8(128 - w, 10, buf);
+
   if (g_logCount == 0) {
-    u8g2.drawStr(0, 32, "No dives recorded");
+    u8g2.drawUTF8(0, 36, "无潜水记录");
   } else {
     DiveRecord &r = g_log[0];
-    snprintf(buf, sizeof(buf), "Max  %.1f m", r.maxDepth);   u8g2.drawStr(0, 22, buf);
-    snprintf(buf, sizeof(buf), "Time %u:%02u", r.durationSec/60, r.durationSec%60); u8g2.drawStr(0, 34, buf);
-    snprintf(buf, sizeof(buf), "Temp %.1f C", r.minTemp);    u8g2.drawStr(0, 46, buf);
-    snprintf(buf, sizeof(buf), "%s", r.saltwater ? "Saltwater" : "Freshwater"); u8g2.drawStr(0, 58, buf);
+    snprintf(buf, sizeof(buf), "最深  %.1f 米", r.maxDepth);
+    u8g2.drawUTF8(0, 26, buf);
+    snprintf(buf, sizeof(buf), "时长  %u:%02u",  r.durationSec/60, r.durationSec%60);
+    u8g2.drawUTF8(0, 40, buf);
+    snprintf(buf, sizeof(buf), "温度  %.1f ℃",  r.minTemp);
+    u8g2.drawUTF8(0, 54, buf);
+    u8g2.drawUTF8(0, 64, r.saltwater ? "海水" : "淡水");
   }
-  snprintf(buf, sizeof(buf), "Total %u", g_diveTotal);
-  int w = u8g2.getStrWidth(buf);
-  u8g2.drawStr(128 - w, 8, buf);
   u8g2.sendBuffer();
 }
 
 void drawLogList() {
   u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_6x10_tr);
-  u8g2.drawStr(0, 8, "LOG");
+  u8g2.setFont(FONT_CN);
+  u8g2.drawUTF8(0, 10, "潜水日志");
   char buf[32];
   snprintf(buf, sizeof(buf), "%u/%u", g_logViewIdx + 1, g_logCount);
-  int w = u8g2.getStrWidth(buf);
-  u8g2.drawStr(128 - w, 8, buf);
+  int w = u8g2.getUTF8Width(buf);
+  u8g2.drawUTF8(128 - w, 10, buf);
 
   if (g_logCount == 0) {
-    u8g2.drawStr(0, 32, "Log is empty");
+    u8g2.drawUTF8(0, 36, "日志为空");
   } else {
     if (g_logViewIdx >= g_logCount) g_logViewIdx = g_logCount - 1;
     DiveRecord &r = g_log[g_logViewIdx];
-    snprintf(buf, sizeof(buf), "#%u  %.1f m", g_diveTotal - g_logViewIdx, r.maxDepth);
-    u8g2.drawStr(0, 22, buf);
-    snprintf(buf, sizeof(buf), "%u:%02u  %.1fC", r.durationSec/60, r.durationSec%60, r.minTemp);
-    u8g2.drawStr(0, 36, buf);
-    u8g2.drawStr(0, 50, r.saltwater ? "Saltwater" : "Freshwater");
-    u8g2.setFont(u8g2_font_5x7_tr);
-    u8g2.drawStr(0, 62, "UP/DOWN: browse");
+    snprintf(buf, sizeof(buf), "#%u  最深 %.1f米", g_diveTotal - g_logViewIdx, r.maxDepth);
+    u8g2.drawUTF8(0, 26, buf);
+    snprintf(buf, sizeof(buf), "时长 %u:%02u  %.1f℃", r.durationSec/60, r.durationSec%60, r.minTemp);
+    u8g2.drawUTF8(0, 40, buf);
+    u8g2.drawUTF8(0, 54, r.saltwater ? "海水" : "淡水");
+    u8g2.drawUTF8(0, 64, "上下键浏览");
   }
+  u8g2.sendBuffer();
+}
+
+void drawStats() {
+  u8g2.clearBuffer();
+  u8g2.setFont(FONT_CN);
+  u8g2.drawUTF8(0, 10, "总览统计");
+
+  char buf[40];
+  snprintf(buf, sizeof(buf), "潜水次数  %u 次", g_diveTotal);
+  u8g2.drawUTF8(0, 24, buf);
+
+  snprintf(buf, sizeof(buf), "历史最深  %.1f m", g_diveTotalMaxD);
+  u8g2.drawUTF8(0, 36, buf);
+
+  uint32_t totMin = g_lifetimeUnderwaterSec / 60;
+  uint32_t totH   = totMin / 60;
+  snprintf(buf, sizeof(buf), "累计水下  %luh%02lum", (unsigned long)totH, (unsigned long)(totMin % 60));
+  u8g2.drawUTF8(0, 48, buf);
+
+  if (g_batPresent) {
+    snprintf(buf, sizeof(buf), "电池 %.2fV  %u%%", g_batVoltage, g_batPct);
+  } else {
+    snprintf(buf, sizeof(buf), "电池: 未接入");
+  }
+  u8g2.drawUTF8(0, 62, buf);
+
   u8g2.sendBuffer();
 }
 
 void drawTimeEdit() {
   u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_6x10_tr);
-  u8g2.drawStr(0, 8, "SET CLOCK");
-  u8g2.drawStr(80, 8, "MODE:OK");
+  u8g2.setFont(FONT_CN);
+  u8g2.drawUTF8(0, 10, "设置时间");
+  u8g2.drawUTF8(82, 10, "MODE确定");
 
-  // Big time display
+  // 大字时间显示
   char buf[8];
-  u8g2.setFont(u8g2_font_logisoso28_tn);
+  u8g2.setFont(FONT_BIG);
   snprintf(buf, sizeof(buf), "%02u:%02u", g_editHH, g_editMM);
   int w = u8g2.getStrWidth(buf);
   int x = (128 - w) / 2;
-  u8g2.drawStr(x, 42, buf);
+  u8g2.drawStr(x, 44, buf);
 
-  // Underline the field being edited
-  // Position of "HH" and "MM" within the rendered string
+  // 下划线指示当前编辑字段
   int colonOffset = u8g2.getStrWidth("00");
   int afterColon  = u8g2.getStrWidth("00:");
   int hhX = x;
   int mmX = x + afterColon;
-  if (g_editField == 0) u8g2.drawHLine(hhX, 46, colonOffset);
-  else                  u8g2.drawHLine(mmX, 46, colonOffset);
+  if (g_editField == 0) u8g2.drawHLine(hhX, 48, colonOffset);
+  else                  u8g2.drawHLine(mmX, 48, colonOffset);
 
-  u8g2.setFont(u8g2_font_6x10_tr);
-  u8g2.drawStr(0, 60, "UP/DN: +/-   MODE: field");
+  u8g2.setFont(FONT_CN);
+  u8g2.drawUTF8(0, 64, "上下增减   MODE切换");
   u8g2.sendBuffer();
 }
 
 void drawSplash() {
   u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_ncenB12_tr);
-  u8g2.drawStr(0, 18, "DiveWatch");
-  u8g2.setFont(u8g2_font_6x10_tr);
-  u8g2.drawStr(0, 34, "v2.0  ZHL-16C  3-btn");
-  char buf[32];
-  snprintf(buf, sizeof(buf), "Surface: %.1f mbar", g_surfacePressure);
-  u8g2.drawStr(0, 48, buf);
-  snprintf(buf, sizeof(buf), "Density: %.0f kg/m^3", g_fluidDensity);
-  u8g2.drawStr(0, 62, buf);
+  u8g2.setFont(FONT_MID);
+  u8g2.drawUTF8(0, 22, "潜水表");
+  u8g2.setFont(FONT_CN);
+  u8g2.drawUTF8(0, 36, "v2.1  ZHL-16C  中文");
+  char buf[40];
+  snprintf(buf, sizeof(buf), "水面: %.1f mbar", g_surfacePressure);
+  u8g2.drawUTF8(0, 50, buf);
+  snprintf(buf, sizeof(buf), "密度: %.0f kg/m³", g_fluidDensity);
+  u8g2.drawUTF8(0, 64, buf);
   u8g2.sendBuffer();
 }
 
 void drawError(const char *l1, const char *l2 = nullptr) {
   u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_ncenB10_tr);
-  u8g2.drawStr(0, 16, "ERROR");
-  u8g2.setFont(u8g2_font_6x10_tr);
-  u8g2.drawStr(0, 36, l1);
-  if (l2) u8g2.drawStr(0, 50, l2);
+  u8g2.setFont(FONT_MID);
+  u8g2.drawUTF8(0, 22, "错误");
+  u8g2.setFont(FONT_CN);
+  u8g2.drawUTF8(0, 42, l1);
+  if (l2) u8g2.drawUTF8(0, 58, l2);
   u8g2.sendBuffer();
 }
 
@@ -654,7 +712,7 @@ void setup() {
   uint8_t tries = 0;
   while (!sensor.init()) {
     Serial.println("[MS5837] init failed");
-    drawError("MS5837 init fail", "Check wiring/3V3");
+    drawError("MS5837 初始化失败", "检查接线/3V3");
     if (++tries >= 5) { g_sensorOk = false; break; }
     delay(800);
   }
@@ -678,6 +736,7 @@ void setup() {
   drawSplash();
   beepBlocking(2, 70);
   delay(700);
+  g_lastInteractMs = millis();
 }
 
 // ================== Loop =============================================
@@ -688,6 +747,30 @@ void loop() {
   btnPoll(g_btnMode, now);
   btnPoll(g_btnUp,   now);
   btnPoll(g_btnDown, now);
+
+  // ---- Power saving: wake / sleep OLED ----
+  bool anyBtnEvent = g_btnMode.evShort || g_btnMode.evLong ||
+                     g_btnUp.evShort   || g_btnUp.evLong   ||
+                     g_btnDown.evShort || g_btnDown.evLong;
+  if (anyBtnEvent || g_diving) {
+    g_lastInteractMs = now;
+    if (g_screenOff) {
+      g_screenOff = false;
+      u8g2.setPowerSave(0);
+      // Consume the wake-up button event (don't trigger an action)
+      if (anyBtnEvent) {
+        g_btnMode.evShort = g_btnMode.evLong = false;
+        g_btnUp.evShort   = g_btnUp.evLong   = false;
+        g_btnDown.evShort = g_btnDown.evLong = false;
+      }
+    }
+  }
+  if (!g_screenOff && !g_editingTime && !g_diving &&
+      (now - g_lastInteractMs > SCREEN_OFF_MS)) {
+    g_screenOff = true;
+    u8g2.setPowerSave(1);
+    Serial.println("[POWER] OLED off (idle)");
+  }
 
   // ---- Battery (every 5s) ----
   updateBattery(now);
@@ -828,7 +911,9 @@ void loop() {
   float ndl = computeNDL(g_depthSmooth);
 
   // ---- Render ----
-  if (g_editingTime) {
+  if (g_screenOff) {
+    // skip rendering while screen is off
+  } else if (g_editingTime) {
     drawTimeEdit();
   } else {
     switch (g_page) {
@@ -836,6 +921,7 @@ void loop() {
       case PAGE_TISSUE:   drawTissue(g_depthSmooth); break;
       case PAGE_LASTDIVE: drawLastDive(); break;
       case PAGE_LOG:      drawLogList();  break;
+      case PAGE_STATS:    drawStats();    break;
     }
   }
 
