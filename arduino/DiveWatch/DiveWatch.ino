@@ -550,6 +550,10 @@ float depthFromPressure(float pressureMbar) {
 #define FONT_BIG    u8g2_font_logisoso28_tn
 #define FONT_MID    u8g2_font_logisoso24_tn
 
+// 128x64 布局规范:
+//   行 baseline y: 10, 22, 34, 46, 58 (12 像素间距, 不重叠)
+//   大字 baseline: 36 (logisoso24, 字符占 12-36)
+// HUD 4 段: 顶 y=10 / 大字 y=36 / 中 y=48 / 底 y=60
 void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm, uint32_t diveSec) {
   u8g2.clearBuffer();
   u8g2.setFont(FONT_CN);
@@ -558,65 +562,67 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
   uint8_t hh, mm, ss;
   getCurrentTime(hh, mm, ss);
 
-  // 顶部左: 实时时钟 HH:MM
+  // 顶部 y=10 (字符占 1-11)
+  // 左: 时钟  中: 潜水时长[在潜水时]  右: 电池图标 % + 海/淡
   snprintf(buf, sizeof(buf), "%02u:%02u", hh, mm);
   u8g2.drawUTF8(0, 10, buf);
 
-  // 顶部中: 潜水计时(仅潜水中显示)
   if (g_diving) {
     snprintf(buf, sizeof(buf), "[%02lu:%02lu]", (unsigned long)(diveSec / 60), (unsigned long)(diveSec % 60));
     int w = u8g2.getUTF8Width(buf);
     u8g2.drawUTF8((128 - w) / 2, 10, buf);
   }
 
-  // 顶部右: 电池图标 + 百分比 + 海/淡水标识
   if (g_batPresent) {
-    drawBatteryIcon(74, 2);
+    drawBatteryIcon(72, 2);
     snprintf(buf, sizeof(buf), "%d%%", g_batPct);
-    u8g2.drawUTF8(94, 10, buf);
+    u8g2.drawUTF8(92, 10, buf);
   }
-  u8g2.drawUTF8(116, 10, g_fluidDensity > 1010 ? "海" : "淡");
+  u8g2.drawUTF8(115, 10, g_fluidDensity > 1010 ? "海" : "淡");
 
-  // 大字深度(居中)
+  // 大字深度 y=36 (logisoso24, 字符占 12-36)
   if (depth < 100.0f) snprintf(buf, sizeof(buf), "%4.1f", depth);
   else                snprintf(buf, sizeof(buf), "%4.0f", depth);
-  u8g2.setFont(FONT_BIG);
+  u8g2.setFont(u8g2_font_logisoso24_tn);
   int dw = u8g2.getStrWidth(buf);
-  u8g2.drawStr((128 - dw) / 2, 42, buf);
-
-  // 中部: NDL / 安全停留 / 减压
+  int dx = (128 - dw - 14) / 2;  // 给右侧 "米" 留出空间
+  if (dx < 0) dx = 0;
+  u8g2.drawStr(dx, 36, buf);
   u8g2.setFont(FONT_CN);
+  u8g2.drawUTF8(dx + dw + 2, 34, "米");
+
+  // 中部 y=48 (字符占 36-48, 与大字间距 0): NDL / 状态
   if (g_ss == SS_RUNNING || g_ss == SS_ARMED) {
     uint32_t remain = (g_ssAccumMs >= g_safetyStopSec * 1000UL) ? 0 : (g_safetyStopSec * 1000UL - g_ssAccumMs);
     snprintf(buf, sizeof(buf), "安全停%lu秒", (unsigned long)(remain / 1000));
-    u8g2.drawUTF8(0, 54, buf);
+    u8g2.drawUTF8(0, 48, buf);
   } else if (g_ss == SS_DONE) {
-    u8g2.drawUTF8(0, 54, "安全停留完成");
+    u8g2.drawUTF8(0, 48, "安全停留完成");
   } else if (ndl >= 99.0f) {
-    u8g2.drawUTF8(0, 54, "NDL>99分");
+    u8g2.drawUTF8(0, 48, "NDL>99分");
   } else if (ndl <= 0.0f) {
-    u8g2.drawUTF8(0, 54, "需减压!");
+    u8g2.drawUTF8(0, 48, "需减压!");
   } else {
     snprintf(buf, sizeof(buf), "NDL %2.0f分", ndl);
-    u8g2.drawUTF8(0, 54, buf);
+    u8g2.drawUTF8(0, 48, buf);
   }
 
   // 中部右: 最深
   snprintf(buf, sizeof(buf), "最深%.1f", maxDepth);
   int w = u8g2.getUTF8Width(buf);
-  u8g2.drawUTF8(128 - w - 8, 54, buf);
+  u8g2.drawUTF8(128 - w, 48, buf);
 
-  // 底部: 温度 + 上升速率
+  // 底部 y=60 (字符占 48-60, 与中部 36-48 间距 0): 温度 + 上升速率
   snprintf(buf, sizeof(buf), "%.1f度", temp);
-  u8g2.drawUTF8(0, 62, buf);
+  u8g2.drawUTF8(0, 60, buf);
 
   snprintf(buf, sizeof(buf), "%+.1f米/分", ascentMpm);
   w = u8g2.getUTF8Width(buf);
-  u8g2.drawUTF8(128 - w - 8, 62, buf);
+  u8g2.drawUTF8(128 - w, 60, buf);
 
-  // 警告标志(右边缘)
-  if (depth > g_alarmDepth)          u8g2.drawUTF8(120, 54, "!");
-  if (ascentMpm > g_ascentLimit) u8g2.drawUTF8(120, 62, "^");
+  // 警告标志 (右上角小标识)
+  if (depth > g_alarmDepth)      u8g2.drawUTF8(123, 22, "!");
+  if (ascentMpm > g_ascentLimit) u8g2.drawUTF8(123, 34, "^");
 
   u8g2.sendBuffer();
 }
@@ -624,15 +630,16 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
 void drawTissue(float depth) {
   u8g2.clearBuffer();
   u8g2.setFont(FONT_CN);
+  // y=10 标题 + 最大百分比
   u8g2.drawUTF8(0, 10, "组织负荷");
 
   float pct = computeTissueLoadPct(depth);
   char buf[32];
-  snprintf(buf, sizeof(buf), "最大 %3.0f%%", pct);
+  snprintf(buf, sizeof(buf), "最大%3.0f%%", pct);
   int w = u8g2.getUTF8Width(buf);
   u8g2.drawUTF8(128 - w, 10, buf);
 
-  // 16 房间柱状图
+  // 16 房间柱状图 y=14-46 (高 32)
   int x0 = 0;
   int barW = 7;
   int gap  = 1;
@@ -650,20 +657,21 @@ void drawTissue(float depth) {
     u8g2.drawBox(x, yTop + (hMax - h), barW, h);
   }
 
-  // 底部: NDL
+  // y=58 底部: NDL
   float ndl = computeNDL(depth);
   if (ndl >= 99.0f)      snprintf(buf, sizeof(buf), "NDL >99 分");
   else if (ndl <= 0.0f)  snprintf(buf, sizeof(buf), "需要减压");
   else                   snprintf(buf, sizeof(buf), "NDL %.0f 分钟", ndl);
-  u8g2.drawUTF8(0, 62, buf);
+  u8g2.drawUTF8(0, 58, buf);
   u8g2.sendBuffer();
 }
 
 void drawLastDive() {
   u8g2.clearBuffer();
   u8g2.setFont(FONT_CN);
+  // y=10 标题 + 累计
   u8g2.drawUTF8(0, 10, "上次潜水");
-  char buf[32];
+  char buf[40];
   snprintf(buf, sizeof(buf), "累计%u次", g_diveTotal);
   int w = u8g2.getUTF8Width(buf);
   u8g2.drawUTF8(128 - w, 10, buf);
@@ -672,20 +680,21 @@ void drawLastDive() {
     u8g2.drawUTF8(0, 36, "无潜水记录");
   } else {
     DiveRecord &r = g_log[0];
+    // y=22/34/46/58 (4 行, 12 间距, 不重叠)
     snprintf(buf, sizeof(buf), "最深  %.1f 米", r.maxDepth);
-    u8g2.drawUTF8(0, 26, buf);
+    u8g2.drawUTF8(0, 22, buf);
     snprintf(buf, sizeof(buf), "时长  %u:%02u",  r.durationSec/60, r.durationSec%60);
-    u8g2.drawUTF8(0, 40, buf);
+    u8g2.drawUTF8(0, 34, buf);
     snprintf(buf, sizeof(buf), "温度  %.1f 度",  r.minTemp);
-    u8g2.drawUTF8(0, 52, buf);
+    u8g2.drawUTF8(0, 46, buf);
 
-    // 距上次潜水时长 (水面间隔)
+    // y=58 底部: 海/淡 + 距今时间
     if (r.endEpoch > 0) {
       time_t nowEpoch;
       time(&nowEpoch);
       int32_t intervalSec = (int32_t)((uint32_t)nowEpoch - r.endEpoch);
       if (intervalSec >= 0 && intervalSec < 99 * 3600) {
-        snprintf(buf, sizeof(buf), "%s  距今%ldh%02ldm",
+        snprintf(buf, sizeof(buf), "%s 距今%ldh%02ldm",
                  r.saltwater ? "海水" : "淡水",
                  (long)(intervalSec / 3600), (long)((intervalSec / 60) % 60));
       } else {
@@ -694,7 +703,7 @@ void drawLastDive() {
     } else {
       snprintf(buf, sizeof(buf), "%s", r.saltwater ? "海水" : "淡水");
     }
-    u8g2.drawUTF8(0, 62, buf);
+    u8g2.drawUTF8(0, 58, buf);
   }
   u8g2.sendBuffer();
 }
@@ -702,8 +711,9 @@ void drawLastDive() {
 void drawLogList() {
   u8g2.clearBuffer();
   u8g2.setFont(FONT_CN);
+  // y=10 标题 + N/M
   u8g2.drawUTF8(0, 10, "潜水日志");
-  char buf[32];
+  char buf[40];
   snprintf(buf, sizeof(buf), "%u/%u", g_logViewIdx + 1, g_logCount);
   int w = u8g2.getUTF8Width(buf);
   u8g2.drawUTF8(128 - w, 10, buf);
@@ -713,12 +723,14 @@ void drawLogList() {
   } else {
     if (g_logViewIdx >= g_logCount) g_logViewIdx = g_logCount - 1;
     DiveRecord &r = g_log[g_logViewIdx];
-    snprintf(buf, sizeof(buf), "#%u  最深 %.1f米", g_diveTotal - g_logViewIdx, r.maxDepth);
-    u8g2.drawUTF8(0, 26, buf);
-    snprintf(buf, sizeof(buf), "时长 %u:%02u  %.1f度", r.durationSec/60, r.durationSec%60, r.minTemp);
-    u8g2.drawUTF8(0, 40, buf);
-    u8g2.drawUTF8(0, 52, r.saltwater ? "海水" : "淡水");
-    u8g2.drawUTF8(0, 62, "上下键浏览");
+    // y=22/34/46/58 (4 行, 12 间距)
+    snprintf(buf, sizeof(buf), "#%u 最深%.1f米", g_diveTotal - g_logViewIdx, r.maxDepth);
+    u8g2.drawUTF8(0, 22, buf);
+    snprintf(buf, sizeof(buf), "时长 %u:%02u", r.durationSec/60, r.durationSec%60);
+    u8g2.drawUTF8(0, 34, buf);
+    snprintf(buf, sizeof(buf), "温度 %.1f度  %s", r.minTemp, r.saltwater ? "海水" : "淡水");
+    u8g2.drawUTF8(0, 46, buf);
+    u8g2.drawUTF8(0, 58, "上下键浏览");
   }
   u8g2.sendBuffer();
 }
@@ -728,17 +740,18 @@ void drawTempChart() {
   u8g2.setFont(FONT_CN);
 
   char buf[24];
+  // y=10 标题 + 当前温度
   snprintf(buf, sizeof(buf), "温度 %.1f度", g_temp);
   u8g2.drawUTF8(0, 10, buf);
 
-  // 右上: 当前采样数
+  // y=10 右上: 采样进度
   snprintf(buf, sizeof(buf), "%u/60", g_tempHistCount);
   int w = u8g2.getUTF8Width(buf);
   u8g2.drawUTF8(128 - w, 10, buf);
 
   if (g_tempHistCount < 2) {
-    u8g2.drawUTF8(0, 36, "数据收集中...");
-    u8g2.drawUTF8(0, 50, "每分钟一个样本");
+    u8g2.drawUTF8(0, 34, "数据收集中...");
+    u8g2.drawUTF8(0, 46, "每分钟一个样本");
     u8g2.sendBuffer();
     return;
   }
@@ -751,14 +764,14 @@ void drawTempChart() {
   }
   if (maxT - minT < 0.5f) { float c = (maxT + minT) / 2; minT = c - 0.25f; maxT = c + 0.25f; }
 
-  // Y 轴上下界标签
+  // Y 轴标签 (左侧, 紧凑)
   snprintf(buf, sizeof(buf), "%4.1f", maxT);
   u8g2.drawUTF8(0, 22, buf);
   snprintf(buf, sizeof(buf), "%4.1f", minT);
-  u8g2.drawUTF8(0, 60, buf);
+  u8g2.drawUTF8(0, 58, buf);
 
-  // 绘图区
-  int x0 = 26, y0 = 14, gw = 100, gh = 44;
+  // 绘图区: x=28-126, y=16-58 (宽 98, 高 42)
+  int x0 = 28, y0 = 16, gw = 98, gh = 42;
   u8g2.drawFrame(x0, y0, gw, gh);
 
   // 折线
@@ -787,13 +800,20 @@ void recordTempSample(uint32_t now) {
 void drawStats() {
   u8g2.clearBuffer();
   u8g2.setFont(FONT_CN);
+  // y=10 标题 + 电池
   u8g2.drawUTF8(0, 10, "总览统计");
 
   char buf[40];
+  if (g_batPresent) snprintf(buf, sizeof(buf), "%.2fV %u%%", g_batVoltage, g_batPct);
+  else              snprintf(buf, sizeof(buf), "未接电池");
+  int w = u8g2.getUTF8Width(buf);
+  u8g2.drawUTF8(128 - w, 10, buf);
+
+  // y=22/34/46/58 (4 行)
   snprintf(buf, sizeof(buf), "潜水次数  %u 次", g_diveTotal);
   u8g2.drawUTF8(0, 22, buf);
 
-  snprintf(buf, sizeof(buf), "历史最深  %.1f m", g_diveTotalMaxD);
+  snprintf(buf, sizeof(buf), "历史最深  %.1f 米", g_diveTotalMaxD);
   u8g2.drawUTF8(0, 34, buf);
 
   uint32_t totMin = g_lifetimeUnderwaterSec / 60;
@@ -801,25 +821,17 @@ void drawStats() {
   snprintf(buf, sizeof(buf), "累计水下  %luh%02lum", (unsigned long)totH, (unsigned long)(totMin % 60));
   u8g2.drawUTF8(0, 46, buf);
 
-  // Surface interval since last dive (if any)
+  // 距上次潜水时长 (水面间隔)
   if (g_logCount > 0 && g_log[0].endEpoch > 0) {
     time_t nowEpoch;
     time(&nowEpoch);
     int32_t intervalSec = (int32_t)((uint32_t)nowEpoch - g_log[0].endEpoch);
     if (intervalSec >= 0 && intervalSec < 99 * 3600) {
-      snprintf(buf, sizeof(buf), "上次距今 %ldh%02ldm",
+      snprintf(buf, sizeof(buf), "距上次潜水  %ldh%02ldm",
                (long)(intervalSec / 3600), (long)((intervalSec / 60) % 60));
       u8g2.drawUTF8(0, 58, buf);
     }
   }
-
-  if (g_batPresent) {
-    snprintf(buf, sizeof(buf), "电 %.2fV %u%%", g_batVoltage, g_batPct);
-  } else {
-    snprintf(buf, sizeof(buf), "电池未接入");
-  }
-  int w = u8g2.getUTF8Width(buf);
-  u8g2.drawUTF8(128 - w, 10, buf);
 
   u8g2.sendBuffer();
 }
@@ -875,14 +887,14 @@ void drawSettings() {
   u8g2.clearBuffer();
   u8g2.setFont(FONT_CN);
 
-  // 标题 + 当前项序号
+  // y=10 标题 + 当前项序号
   char buf[24];
   u8g2.drawUTF8(0, 10, "设置");
   snprintf(buf, sizeof(buf), "%u/%u", g_settingsItem + 1, SETTINGS_COUNT);
   int w = u8g2.getUTF8Width(buf);
   u8g2.drawUTF8(128 - w, 10, buf);
 
-  // 4 项可见, 按当前选中项滚动
+  // y=22/34/46/58 (4 项可见, 12px 间距, 不重叠)
   const int VISIBLE = 4;
   int first = 0;
   if (g_settingsItem >= VISIBLE) first = g_settingsItem - VISIBLE + 1;
@@ -891,9 +903,9 @@ void drawSettings() {
 
   for (int i = 0; i < VISIBLE && first + i < SETTINGS_COUNT; i++) {
     uint8_t idx = first + i;
-    int y = 24 + i * 11;
+    int y = 22 + i * 12;
     if (idx == g_settingsItem) u8g2.drawUTF8(0, y, ">");
-    u8g2.drawUTF8(8, y, settingsItemName(idx));
+    u8g2.drawUTF8(10, y, settingsItemName(idx));
     char vbuf[20];
     settingsItemValue(idx, vbuf, sizeof(vbuf));
     int vw = u8g2.getUTF8Width(vbuf);
@@ -909,51 +921,56 @@ void drawSettingsAndSend() {
 void drawTimeEdit() {
   u8g2.clearBuffer();
   u8g2.setFont(FONT_CN);
+  // y=10 标题 + MODE 提示
   u8g2.drawUTF8(0, 10, "设置时间");
   u8g2.drawUTF8(82, 10, "MODE确定");
 
-  // 大字时间显示
+  // 大字时间 y=40 (logisoso24, 字符 16-40)
   char buf[8];
-  u8g2.setFont(FONT_BIG);
+  u8g2.setFont(u8g2_font_logisoso24_tn);
   snprintf(buf, sizeof(buf), "%02u:%02u", g_editHH, g_editMM);
   int w = u8g2.getStrWidth(buf);
   int x = (128 - w) / 2;
-  u8g2.drawStr(x, 44, buf);
+  u8g2.drawStr(x, 40, buf);
 
   // 下划线指示当前编辑字段
   int colonOffset = u8g2.getStrWidth("00");
   int afterColon  = u8g2.getStrWidth("00:");
   int hhX = x;
   int mmX = x + afterColon;
-  if (g_editField == 0) u8g2.drawHLine(hhX, 48, colonOffset);
-  else                  u8g2.drawHLine(mmX, 48, colonOffset);
+  if (g_editField == 0) u8g2.drawHLine(hhX, 44, colonOffset);
+  else                  u8g2.drawHLine(mmX, 44, colonOffset);
 
+  // y=58 底部提示
   u8g2.setFont(FONT_CN);
-  u8g2.drawUTF8(0, 62, "上下增减   MODE切换");
+  u8g2.drawUTF8(0, 58, "上下增减   MODE切换");
   u8g2.sendBuffer();
 }
 
 void drawSplash() {
   u8g2.clearBuffer();
-  u8g2.setFont(FONT_MID);
-  u8g2.drawUTF8(0, 22, "潜水表");
+  // y=22 大字标题 (logisoso24, 字符 0-22)
+  u8g2.setFont(u8g2_font_logisoso24_tn);
+  // logisoso 字体不支持中文, 标题用 wqy12 大些字代替
   u8g2.setFont(FONT_CN);
-  u8g2.drawUTF8(0, 36, "v2.1  ZHL-16C  中文");
+  u8g2.drawUTF8(0, 14, "潜水表 DiveWatch");
+  // y=28/40/52 副标题 + 水面 + 密度
   char buf[40];
+  u8g2.drawUTF8(0, 28, "v2.3  ZHL-16C  中文");
   snprintf(buf, sizeof(buf), "水面: %.1f mbar", g_surfacePressure);
-  u8g2.drawUTF8(0, 50, buf);
+  u8g2.drawUTF8(0, 42, buf);
   snprintf(buf, sizeof(buf), "密度: %.0f kg/m3", g_fluidDensity);
-  u8g2.drawUTF8(0, 62, buf);
+  u8g2.drawUTF8(0, 54, buf);
   u8g2.sendBuffer();
 }
 
 void drawError(const char *l1, const char *l2 = nullptr) {
   u8g2.clearBuffer();
-  u8g2.setFont(FONT_MID);
-  u8g2.drawUTF8(0, 22, "错误");
   u8g2.setFont(FONT_CN);
-  u8g2.drawUTF8(0, 42, l1);
-  if (l2) u8g2.drawUTF8(0, 58, l2);
+  // y=14 大字标题 + y=34 错误信息行
+  u8g2.drawUTF8(0, 14, "*** 错误 ***");
+  u8g2.drawUTF8(0, 34, l1);
+  if (l2) u8g2.drawUTF8(0, 50, l2);
   u8g2.sendBuffer();
 }
 
@@ -1003,13 +1020,19 @@ void setup() {
   // 显示开机画面 (含 WiFi 同步状态)
   drawSplash();
   if (strlen(WIFI_SSID) > 0) {
+    // 覆盖最后一行 (密度) 显示 WiFi 状态
+    u8g2.setDrawColor(0);
+    u8g2.drawBox(0, 46, 128, 18);
+    u8g2.setDrawColor(1);
     u8g2.setFont(FONT_CN);
-    u8g2.drawUTF8(0, 62, "WiFi 同步中...");
+    u8g2.drawUTF8(0, 58, "WiFi 同步中...");
     u8g2.sendBuffer();
     bool ok = trySyncNTP();
-    drawSplash();
+    u8g2.setDrawColor(0);
+    u8g2.drawBox(0, 46, 128, 18);
+    u8g2.setDrawColor(1);
     u8g2.setFont(FONT_CN);
-    u8g2.drawUTF8(0, 62, ok ? "时间同步完成" : "WiFi 同步失败");
+    u8g2.drawUTF8(0, 58, ok ? "时间同步完成" : "WiFi 同步失败");
     u8g2.sendBuffer();
     delay(1200);
   }
