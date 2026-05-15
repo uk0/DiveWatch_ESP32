@@ -1,0 +1,32 @@
+CLAUDE.md
+*_article
+.idea/
+.DS_Store
+.claude/
+proxy/
+.env
+.env.*
+docs/
+*.docx
+*.doc
+*.xlsx
+*.csv
+userdata/
+session/
+
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+.vscode/
+.clang_complete
+.gcc-flags.json
+
+# Arduino IDE
+build/
+*.hex
+*.elf
+*.bin
+
+# OS
+Thumbs.db
