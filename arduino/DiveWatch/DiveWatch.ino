@@ -77,20 +77,22 @@ static const float BAT_DIVIDER  = 2.0f;
 static const float BAT_FULL_V   = 4.20f;
 static const float BAT_EMPTY_V  = 3.30f;
 
-// ================== Tunables =========================================
-static const float    SURFACE_DEPTH       = 0.5f;   // m, below this = surface
-static const float    DIVE_START_DEPTH    = 1.2f;   // m, above this triggers dive
-static const float    ALARM_DEPTH         = 30.0f;  // m
-static const float    ASCENT_LIMIT_MPM    = 9.0f;   // m/min
-static const float    SAFETY_STOP_DEPTH   = 5.0f;   // m, target depth
-static const float    SAFETY_STOP_BAND    = 1.5f;   // +/- m around 5m
-static const uint32_t SAFETY_STOP_SEC     = 180;    // 3 minutes
+// ================== 固定常量 (不可调) ================================
+static const float    SURFACE_DEPTH       = 0.5f;
+static const float    DIVE_START_DEPTH    = 1.2f;
+static const float    SAFETY_STOP_DEPTH   = 5.0f;
+static const float    SAFETY_STOP_BAND    = 1.5f;
 static const uint32_t SAMPLE_MS           = 200;
 static const uint32_t REARM_BEEP_MS       = 1500;
-static const uint8_t  AVG_WINDOW          = 5;      // samples for moving avg
+static const uint8_t  AVG_WINDOW          = 5;
 
-// Default fluid density (toggle with long-press UP)
-float g_fluidDensity = 1029.0f;  // 1029 sea, 997 fresh
+// ================== 可调参数 (设置菜单可改, 持久化) ==================
+float    g_alarmDepth      = 30.0f;     // 深度报警 m
+float    g_ascentLimit     = 9.0f;      // 上升速率警告 m/min
+uint32_t g_screenOffMs     = 5UL*60*1000;  // 屏保超时 ms
+uint16_t g_safetyStopSec   = 180;       // 安全停留时长 s
+bool     g_buzzerEnable    = true;      // 蜂鸣器开关
+float    g_fluidDensity    = 1029.0f;   // 水密度 (1029 海, 997 淡)
 
 // ================== Globals ==========================================
 U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
@@ -122,10 +124,14 @@ uint8_t  g_editHH          = 12;
 uint8_t  g_editMM          = 0;
 uint32_t g_lastTimeSaveMs  = 0;
 
-// Power saving: dim OLED after idle period
-static const uint32_t SCREEN_OFF_MS = 5UL * 60UL * 1000UL;  // 5 min
+// Power saving: dim OLED after idle period (g_screenOffMs is configurable)
 uint32_t g_lastInteractMs  = 0;
 bool     g_screenOff       = false;
+
+// Settings menu state
+bool     g_inSettings        = false;
+uint8_t  g_settingsItem      = 0;
+static const uint8_t SETTINGS_COUNT = 6;
 
 // Lifetime stats (separate from per-dive log, also in NVS)
 uint32_t g_lifetimeUnderwaterSec = 0;
@@ -248,7 +254,7 @@ void updateSafetyStop(float depth_m, uint32_t now) {
     case SS_RUNNING:
       if (inBand) {
         g_ssAccumMs = now - g_ssEnterMs;
-        if (g_ssAccumMs >= SAFETY_STOP_SEC * 1000UL) g_ss = SS_DONE;
+        if (g_ssAccumMs >= g_safetyStopSec * 1000UL) g_ss = SS_DONE;
       } else {
         g_ss = SS_ARMED;     // left band, will resume when re-enters
         g_ssEnterMs = now;
@@ -300,6 +306,29 @@ uint8_t    g_logCount = 0;
 uint16_t   g_diveTotal = 0;     // lifetime dive count
 float      g_diveTotalMaxD = 0; // lifetime max depth
 float      g_diveMinTemp = 999;
+
+void saveSettingsToNVS() {
+  prefs.begin("dive", false);
+  prefs.putFloat("alarmD",   g_alarmDepth);
+  prefs.putFloat("ascentL",  g_ascentLimit);
+  prefs.putULong("scrOffMs", g_screenOffMs);
+  prefs.putUShort("ssSec",   g_safetyStopSec);
+  prefs.putBool("buzzer",    g_buzzerEnable);
+  prefs.putFloat("density",  g_fluidDensity);
+  prefs.end();
+  Serial.println("[SET] Settings saved");
+}
+
+void loadSettingsFromNVS() {
+  prefs.begin("dive", true);
+  g_alarmDepth     = prefs.getFloat("alarmD",   30.0f);
+  g_ascentLimit    = prefs.getFloat("ascentL",   9.0f);
+  g_screenOffMs    = prefs.getULong("scrOffMs", 5UL * 60UL * 1000UL);
+  g_safetyStopSec  = prefs.getUShort("ssSec",   180);
+  g_buzzerEnable   = prefs.getBool("buzzer",    true);
+  g_fluidDensity   = prefs.getFloat("density",  1029.0f);
+  prefs.end();
+}
 
 void loadLogFromNVS() {
   prefs.begin("dive", true);
@@ -484,6 +513,7 @@ void drawBatteryIcon(int x, int y) {
 
 // ================== Buzzer ===========================================
 void beepBlocking(int times, int onMs, int offMs = 80) {
+  if (!g_buzzerEnable) return;          // 用户在设置里关了蜂鸣器
   for (int i = 0; i < times; i++) {
     digitalWrite(BUZZER_PIN, HIGH);
     delay(onMs);
@@ -516,7 +546,7 @@ float depthFromPressure(float pressureMbar) {
 //   u8g2_font_wqy12_t_chinese1  -> 12px 中文(约1000常用字), 含ASCII
 //   u8g2_font_logisoso28_tn     -> 大字数字(深度)
 //   u8g2_font_logisoso24_tn     -> 中字数字(时间编辑)
-#define FONT_CN     u8g2_font_wqy12_t_chinese1
+#define FONT_CN     u8g2_font_wqy12_t_chinese3
 #define FONT_BIG    u8g2_font_logisoso28_tn
 #define FONT_MID    u8g2_font_logisoso24_tn
 
@@ -557,7 +587,7 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
   // 中部: NDL / 安全停留 / 减压
   u8g2.setFont(FONT_CN);
   if (g_ss == SS_RUNNING || g_ss == SS_ARMED) {
-    uint32_t remain = (g_ssAccumMs >= SAFETY_STOP_SEC * 1000UL) ? 0 : (SAFETY_STOP_SEC * 1000UL - g_ssAccumMs);
+    uint32_t remain = (g_ssAccumMs >= g_safetyStopSec * 1000UL) ? 0 : (g_safetyStopSec * 1000UL - g_ssAccumMs);
     snprintf(buf, sizeof(buf), "安全停%lu秒", (unsigned long)(remain / 1000));
     u8g2.drawUTF8(0, 54, buf);
   } else if (g_ss == SS_DONE) {
@@ -577,7 +607,7 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
   u8g2.drawUTF8(128 - w - 8, 54, buf);
 
   // 底部: 温度 + 上升速率
-  snprintf(buf, sizeof(buf), "%.1f℃", temp);
+  snprintf(buf, sizeof(buf), "%.1f度", temp);
   u8g2.drawUTF8(0, 62, buf);
 
   snprintf(buf, sizeof(buf), "%+.1f米/分", ascentMpm);
@@ -585,8 +615,8 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
   u8g2.drawUTF8(128 - w - 8, 62, buf);
 
   // 警告标志(右边缘)
-  if (depth > ALARM_DEPTH)          u8g2.drawUTF8(120, 54, "!");
-  if (ascentMpm > ASCENT_LIMIT_MPM) u8g2.drawUTF8(120, 62, "^");
+  if (depth > g_alarmDepth)          u8g2.drawUTF8(120, 54, "!");
+  if (ascentMpm > g_ascentLimit) u8g2.drawUTF8(120, 62, "^");
 
   u8g2.sendBuffer();
 }
@@ -646,7 +676,7 @@ void drawLastDive() {
     u8g2.drawUTF8(0, 26, buf);
     snprintf(buf, sizeof(buf), "时长  %u:%02u",  r.durationSec/60, r.durationSec%60);
     u8g2.drawUTF8(0, 40, buf);
-    snprintf(buf, sizeof(buf), "温度  %.1f ℃",  r.minTemp);
+    snprintf(buf, sizeof(buf), "温度  %.1f 度",  r.minTemp);
     u8g2.drawUTF8(0, 52, buf);
 
     // 距上次潜水时长 (水面间隔)
@@ -685,7 +715,7 @@ void drawLogList() {
     DiveRecord &r = g_log[g_logViewIdx];
     snprintf(buf, sizeof(buf), "#%u  最深 %.1f米", g_diveTotal - g_logViewIdx, r.maxDepth);
     u8g2.drawUTF8(0, 26, buf);
-    snprintf(buf, sizeof(buf), "时长 %u:%02u  %.1f℃", r.durationSec/60, r.durationSec%60, r.minTemp);
+    snprintf(buf, sizeof(buf), "时长 %u:%02u  %.1f度", r.durationSec/60, r.durationSec%60, r.minTemp);
     u8g2.drawUTF8(0, 40, buf);
     u8g2.drawUTF8(0, 52, r.saltwater ? "海水" : "淡水");
     u8g2.drawUTF8(0, 62, "上下键浏览");
@@ -698,7 +728,7 @@ void drawTempChart() {
   u8g2.setFont(FONT_CN);
 
   char buf[24];
-  snprintf(buf, sizeof(buf), "温度 %.1f℃", g_temp);
+  snprintf(buf, sizeof(buf), "温度 %.1f度", g_temp);
   u8g2.drawUTF8(0, 10, buf);
 
   // 右上: 当前采样数
@@ -794,6 +824,88 @@ void drawStats() {
   u8g2.sendBuffer();
 }
 
+// 设置菜单的项名 / 值 / 调整
+const char* settingsItemName(uint8_t i) {
+  switch (i) {
+    case 0: return "深度报警";
+    case 1: return "上升警告";
+    case 2: return "屏保超时";
+    case 3: return "安全停留";
+    case 4: return "蜂鸣器";
+    case 5: return "水密度";
+  }
+  return "?";
+}
+
+void settingsItemValue(uint8_t i, char *buf, size_t sz) {
+  switch (i) {
+    case 0: snprintf(buf, sz, "%.0f米", g_alarmDepth); break;
+    case 1: snprintf(buf, sz, "%.0f米/分", g_ascentLimit); break;
+    case 2: snprintf(buf, sz, "%lu分", (unsigned long)(g_screenOffMs / 60000UL)); break;
+    case 3: snprintf(buf, sz, "%u秒", g_safetyStopSec); break;
+    case 4: snprintf(buf, sz, "%s", g_buzzerEnable ? "开" : "关"); break;
+    case 5: snprintf(buf, sz, "%s", g_fluidDensity > 1010 ? "海水" : "淡水"); break;
+  }
+}
+
+void settingsItemAdjust(uint8_t i, int delta) {
+  switch (i) {
+    case 0: g_alarmDepth     = constrain(g_alarmDepth + delta * 5.0f, 5.0f, 60.0f); break;
+    case 1: g_ascentLimit    = constrain(g_ascentLimit + (float)delta, 3.0f, 18.0f); break;
+    case 2: {
+      int min = (int)(g_screenOffMs / 60000UL) + delta;
+      if (min < 1) min = 1; if (min > 30) min = 30;
+      g_screenOffMs = (uint32_t)min * 60000UL;
+      break;
+    }
+    case 3: {
+      int s = (int)g_safetyStopSec + delta * 30;
+      if (s < 60) s = 60; if (s > 300) s = 300;
+      g_safetyStopSec = (uint16_t)s;
+      break;
+    }
+    case 4: g_buzzerEnable = !g_buzzerEnable; break;
+    case 5: g_fluidDensity = (g_fluidDensity > 1010) ? 997.0f : 1029.0f;
+            if (g_sensorOk) sensor.setFluidDensity(g_fluidDensity);
+            break;
+  }
+}
+
+void drawSettings() {
+  u8g2.clearBuffer();
+  u8g2.setFont(FONT_CN);
+
+  // 标题 + 当前项序号
+  char buf[24];
+  u8g2.drawUTF8(0, 10, "设置");
+  snprintf(buf, sizeof(buf), "%u/%u", g_settingsItem + 1, SETTINGS_COUNT);
+  int w = u8g2.getUTF8Width(buf);
+  u8g2.drawUTF8(128 - w, 10, buf);
+
+  // 4 项可见, 按当前选中项滚动
+  const int VISIBLE = 4;
+  int first = 0;
+  if (g_settingsItem >= VISIBLE) first = g_settingsItem - VISIBLE + 1;
+  if (first > SETTINGS_COUNT - VISIBLE) first = SETTINGS_COUNT - VISIBLE;
+  if (first < 0) first = 0;
+
+  for (int i = 0; i < VISIBLE && first + i < SETTINGS_COUNT; i++) {
+    uint8_t idx = first + i;
+    int y = 24 + i * 11;
+    if (idx == g_settingsItem) u8g2.drawUTF8(0, y, ">");
+    u8g2.drawUTF8(8, y, settingsItemName(idx));
+    char vbuf[20];
+    settingsItemValue(idx, vbuf, sizeof(vbuf));
+    int vw = u8g2.getUTF8Width(vbuf);
+    u8g2.drawUTF8(128 - vw, y, vbuf);
+  }
+}
+
+void drawSettingsAndSend() {
+  drawSettings();
+  u8g2.sendBuffer();
+}
+
 void drawTimeEdit() {
   u8g2.clearBuffer();
   u8g2.setFont(FONT_CN);
@@ -830,7 +942,7 @@ void drawSplash() {
   char buf[40];
   snprintf(buf, sizeof(buf), "水面: %.1f mbar", g_surfacePressure);
   u8g2.drawUTF8(0, 50, buf);
-  snprintf(buf, sizeof(buf), "密度: %.0f kg/m³", g_fluidDensity);
+  snprintf(buf, sizeof(buf), "密度: %.0f kg/m3", g_fluidDensity);
   u8g2.drawUTF8(0, 62, buf);
   u8g2.sendBuffer();
 }
@@ -885,6 +997,8 @@ void setup() {
 
   loadLogFromNVS();
   loadClockFromNVS();
+  loadSettingsFromNVS();
+  if (g_sensorOk) sensor.setFluidDensity(g_fluidDensity);
 
   // 显示开机画面 (含 WiFi 同步状态)
   drawSplash();
@@ -932,7 +1046,7 @@ void loop() {
     }
   }
   if (!g_screenOff && !g_editingTime && !g_diving &&
-      (now - g_lastInteractMs > SCREEN_OFF_MS)) {
+      (now - g_lastInteractMs > g_screenOffMs)) {
     g_screenOff = true;
     u8g2.setPowerSave(1);
     Serial.println("[POWER] OLED off (idle)");
@@ -969,6 +1083,29 @@ void loop() {
     // Discard unused long-press events while editing
     g_btnUp.evLong = false;
     g_btnDown.evLong = false;
+  } else if (g_inSettings) {
+    // ---- Settings menu: buttons remapped ----
+    if (g_btnMode.evShort) {
+      g_btnMode.evShort = false;
+      g_settingsItem = (g_settingsItem + 1) % SETTINGS_COUNT;
+    }
+    if (g_btnMode.evLong) {
+      g_btnMode.evLong = false;
+      saveSettingsToNVS();
+      g_inSettings = false;
+      beepBlocking(2, 80);
+      Serial.println("[ACTION] Settings saved & exit");
+    }
+    if (g_btnUp.evShort) {
+      g_btnUp.evShort = false;
+      settingsItemAdjust(g_settingsItem, +1);
+    }
+    if (g_btnDown.evShort) {
+      g_btnDown.evShort = false;
+      settingsItemAdjust(g_settingsItem, -1);
+    }
+    g_btnUp.evLong = false;
+    g_btnDown.evLong = false;
   } else {
     // ---- Normal mode ----
     if (g_btnMode.evShort) {
@@ -992,10 +1129,11 @@ void loop() {
     }
     if (g_btnUp.evLong) {
       g_btnUp.evLong = false;
-      g_fluidDensity = (g_fluidDensity > 1010) ? 997.0f : 1029.0f;
-      if (g_sensorOk) sensor.setFluidDensity(g_fluidDensity);
-      Serial.printf("[ACTION] Density -> %.0f\n", g_fluidDensity);
-      beepBlocking(2, 60);
+      // 长按 UP -> 进入设置菜单 (原"切水"功能挪进菜单)
+      g_inSettings = true;
+      g_settingsItem = 0;
+      Serial.println("[ACTION] Enter settings");
+      beepBlocking(1, 100);
     }
     if (g_btnDown.evShort) {
       g_btnDown.evShort = false;
@@ -1094,6 +1232,8 @@ void loop() {
     // skip rendering while screen is off
   } else if (g_editingTime) {
     drawTimeEdit();
+  } else if (g_inSettings) {
+    drawSettingsAndSend();
   } else {
     switch (g_page) {
       case PAGE_HUD:      drawHud(g_depthSmooth, g_maxDepth, g_temp, ndl, g_ascentMpm, diveSec); break;
@@ -1113,9 +1253,9 @@ void loop() {
 
   // ---- Alarms ----
   if (g_sensorOk && now - g_lastBeepMs > REARM_BEEP_MS) {
-    if (g_depthSmooth > ALARM_DEPTH) {
+    if (g_depthSmooth > g_alarmDepth) {
       beepBlocking(3, 70); g_lastBeepMs = now;
-    } else if (g_ascentMpm > ASCENT_LIMIT_MPM && g_depthSmooth > 3.0f) {
+    } else if (g_ascentMpm > g_ascentLimit && g_depthSmooth > 3.0f) {
       beepBlocking(1, 250); g_lastBeepMs = now;
     } else if (g_ss == SS_DONE && g_lastBeepMs == 0) {
       beepBlocking(2, 100); g_lastBeepMs = now;
