@@ -24,10 +24,22 @@
 #include <Wire.h>
 #include <U8g2lib.h>
 #include <Preferences.h>
+#include <WiFi.h>
 #include <math.h>
 #include <time.h>
 #include <sys/time.h>
 #include "MS5837.h"
+
+// =====================================================================
+// WiFi NTP 校时配置 (用户修改这两行后烧录即可启用)
+//   留空字符串 "" 表示禁用 WiFi 校时
+// =====================================================================
+static const char* WIFI_SSID = "";
+static const char* WIFI_PASS = "";
+static const long  TZ_OFFSET_SEC = 8 * 3600;  // UTC+8 (中国)
+static const char* NTP_SERVER1 = "ntp.aliyun.com";
+static const char* NTP_SERVER2 = "ntp.tencent.com";
+static const char* NTP_SERVER3 = "pool.ntp.org";
 
 // ================== Forward type declarations =======================
 // (Required so Arduino auto-generated function prototypes can reference them)
@@ -117,6 +129,13 @@ bool     g_screenOff       = false;
 
 // Lifetime stats (separate from per-dive log, also in NVS)
 uint32_t g_lifetimeUnderwaterSec = 0;
+
+// Temperature history (1 sample/min, ring buffer of 60 = 1 hour)
+static const uint8_t TEMP_HIST_LEN = 60;
+float    g_tempHist[TEMP_HIST_LEN] = {0};
+uint8_t  g_tempHistIdx   = 0;
+uint8_t  g_tempHistCount = 0;
+uint32_t g_lastTempSampleMs = 0;
 
 // ================== Moving-average filter ============================
 float    g_pressBuf[AVG_WINDOW] = {0};
@@ -270,7 +289,7 @@ void btnPoll(Button &b, uint32_t now) {
 }
 
 // ================== UI pages =========================================
-enum Page : uint8_t { PAGE_HUD = 0, PAGE_TISSUE, PAGE_LASTDIVE, PAGE_LOG, PAGE_STATS, PAGE_COUNT };
+enum Page : uint8_t { PAGE_HUD = 0, PAGE_TISSUE, PAGE_TEMP, PAGE_LASTDIVE, PAGE_LOG, PAGE_STATS, PAGE_COUNT };
 uint8_t g_page = PAGE_HUD;
 uint8_t g_logViewIdx = 0;
 
@@ -372,6 +391,48 @@ void loadClockFromNVS() {
     // First boot ever -> default to 12:00:00
     setSystemClock(12, 0, 0);
   }
+}
+
+// 尝试通过 WiFi + NTP 同步时间, 完成后关闭 WiFi 省电
+// 返回 true = 同步成功, false = 失败 (无 SSID / 连不上 / NTP 超时)
+bool trySyncNTP() {
+  if (strlen(WIFI_SSID) == 0) {
+    Serial.println("[NTP] WIFI_SSID 未配置, 跳过");
+    return false;
+  }
+  Serial.printf("[NTP] 连接 WiFi: %s\n", WIFI_SSID);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 8000) {
+    delay(120);
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[NTP] WiFi 超时, 放弃");
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    return false;
+  }
+  Serial.printf("[NTP] WiFi OK, IP=%s, 同步 NTP...\n", WiFi.localIP().toString().c_str());
+  configTime(TZ_OFFSET_SEC, 0, NTP_SERVER1, NTP_SERVER2, NTP_SERVER3);
+
+  time_t now = 0;
+  start = millis();
+  while (now < 1700000000 && millis() - start < 5000) {
+    delay(200);
+    time(&now);
+  }
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+
+  if (now > 1700000000) {
+    saveClockToNVS();
+    Serial.printf("[NTP] 同步成功: epoch=%lu\n", (unsigned long)now);
+    return true;
+  }
+  Serial.println("[NTP] NTP 超时");
+  return false;
 }
 
 // ================== Battery ==========================================
@@ -517,15 +578,15 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
 
   // 底部: 温度 + 上升速率
   snprintf(buf, sizeof(buf), "%.1f℃", temp);
-  u8g2.drawUTF8(0, 64, buf);
+  u8g2.drawUTF8(0, 62, buf);
 
   snprintf(buf, sizeof(buf), "%+.1f米/分", ascentMpm);
   w = u8g2.getUTF8Width(buf);
-  u8g2.drawUTF8(128 - w - 8, 64, buf);
+  u8g2.drawUTF8(128 - w - 8, 62, buf);
 
   // 警告标志(右边缘)
   if (depth > ALARM_DEPTH)          u8g2.drawUTF8(120, 54, "!");
-  if (ascentMpm > ASCENT_LIMIT_MPM) u8g2.drawUTF8(120, 64, "^");
+  if (ascentMpm > ASCENT_LIMIT_MPM) u8g2.drawUTF8(120, 62, "^");
 
   u8g2.sendBuffer();
 }
@@ -564,7 +625,7 @@ void drawTissue(float depth) {
   if (ndl >= 99.0f)      snprintf(buf, sizeof(buf), "NDL >99 分");
   else if (ndl <= 0.0f)  snprintf(buf, sizeof(buf), "需要减压");
   else                   snprintf(buf, sizeof(buf), "NDL %.0f 分钟", ndl);
-  u8g2.drawUTF8(0, 64, buf);
+  u8g2.drawUTF8(0, 62, buf);
   u8g2.sendBuffer();
 }
 
@@ -586,8 +647,24 @@ void drawLastDive() {
     snprintf(buf, sizeof(buf), "时长  %u:%02u",  r.durationSec/60, r.durationSec%60);
     u8g2.drawUTF8(0, 40, buf);
     snprintf(buf, sizeof(buf), "温度  %.1f ℃",  r.minTemp);
-    u8g2.drawUTF8(0, 54, buf);
-    u8g2.drawUTF8(0, 64, r.saltwater ? "海水" : "淡水");
+    u8g2.drawUTF8(0, 52, buf);
+
+    // 距上次潜水时长 (水面间隔)
+    if (r.endEpoch > 0) {
+      time_t nowEpoch;
+      time(&nowEpoch);
+      int32_t intervalSec = (int32_t)((uint32_t)nowEpoch - r.endEpoch);
+      if (intervalSec >= 0 && intervalSec < 99 * 3600) {
+        snprintf(buf, sizeof(buf), "%s  距今%ldh%02ldm",
+                 r.saltwater ? "海水" : "淡水",
+                 (long)(intervalSec / 3600), (long)((intervalSec / 60) % 60));
+      } else {
+        snprintf(buf, sizeof(buf), "%s", r.saltwater ? "海水" : "淡水");
+      }
+    } else {
+      snprintf(buf, sizeof(buf), "%s", r.saltwater ? "海水" : "淡水");
+    }
+    u8g2.drawUTF8(0, 62, buf);
   }
   u8g2.sendBuffer();
 }
@@ -610,10 +687,71 @@ void drawLogList() {
     u8g2.drawUTF8(0, 26, buf);
     snprintf(buf, sizeof(buf), "时长 %u:%02u  %.1f℃", r.durationSec/60, r.durationSec%60, r.minTemp);
     u8g2.drawUTF8(0, 40, buf);
-    u8g2.drawUTF8(0, 54, r.saltwater ? "海水" : "淡水");
-    u8g2.drawUTF8(0, 64, "上下键浏览");
+    u8g2.drawUTF8(0, 52, r.saltwater ? "海水" : "淡水");
+    u8g2.drawUTF8(0, 62, "上下键浏览");
   }
   u8g2.sendBuffer();
+}
+
+void drawTempChart() {
+  u8g2.clearBuffer();
+  u8g2.setFont(FONT_CN);
+
+  char buf[24];
+  snprintf(buf, sizeof(buf), "温度 %.1f℃", g_temp);
+  u8g2.drawUTF8(0, 10, buf);
+
+  // 右上: 当前采样数
+  snprintf(buf, sizeof(buf), "%u/60", g_tempHistCount);
+  int w = u8g2.getUTF8Width(buf);
+  u8g2.drawUTF8(128 - w, 10, buf);
+
+  if (g_tempHistCount < 2) {
+    u8g2.drawUTF8(0, 36, "数据收集中...");
+    u8g2.drawUTF8(0, 50, "每分钟一个样本");
+    u8g2.sendBuffer();
+    return;
+  }
+
+  // 找 min/max
+  float minT = 999, maxT = -999;
+  for (int i = 0; i < g_tempHistCount; i++) {
+    if (g_tempHist[i] < minT) minT = g_tempHist[i];
+    if (g_tempHist[i] > maxT) maxT = g_tempHist[i];
+  }
+  if (maxT - minT < 0.5f) { float c = (maxT + minT) / 2; minT = c - 0.25f; maxT = c + 0.25f; }
+
+  // Y 轴上下界标签
+  snprintf(buf, sizeof(buf), "%4.1f", maxT);
+  u8g2.drawUTF8(0, 22, buf);
+  snprintf(buf, sizeof(buf), "%4.1f", minT);
+  u8g2.drawUTF8(0, 60, buf);
+
+  // 绘图区
+  int x0 = 26, y0 = 14, gw = 100, gh = 44;
+  u8g2.drawFrame(x0, y0, gw, gh);
+
+  // 折线
+  for (int i = 0; i < g_tempHistCount - 1; i++) {
+    int idx1 = (g_tempHistIdx + TEMP_HIST_LEN - g_tempHistCount + i) % TEMP_HIST_LEN;
+    int idx2 = (g_tempHistIdx + TEMP_HIST_LEN - g_tempHistCount + i + 1) % TEMP_HIST_LEN;
+    int x1 = x0 + 1 + i * (gw - 2) / (g_tempHistCount - 1);
+    int x2 = x0 + 1 + (i + 1) * (gw - 2) / (g_tempHistCount - 1);
+    int y1 = y0 + gh - 2 - (int)((g_tempHist[idx1] - minT) * (gh - 4) / (maxT - minT));
+    int y2 = y0 + gh - 2 - (int)((g_tempHist[idx2] - minT) * (gh - 4) / (maxT - minT));
+    u8g2.drawLine(x1, y1, x2, y2);
+  }
+
+  u8g2.sendBuffer();
+}
+
+void recordTempSample(uint32_t now) {
+  if (!g_sensorOk) return;
+  if (g_lastTempSampleMs != 0 && now - g_lastTempSampleMs < 60000) return;
+  g_lastTempSampleMs = now;
+  g_tempHist[g_tempHistIdx] = g_temp;
+  g_tempHistIdx = (g_tempHistIdx + 1) % TEMP_HIST_LEN;
+  if (g_tempHistCount < TEMP_HIST_LEN) g_tempHistCount++;
 }
 
 void drawStats() {
@@ -679,7 +817,7 @@ void drawTimeEdit() {
   else                  u8g2.drawHLine(mmX, 48, colonOffset);
 
   u8g2.setFont(FONT_CN);
-  u8g2.drawUTF8(0, 64, "上下增减   MODE切换");
+  u8g2.drawUTF8(0, 62, "上下增减   MODE切换");
   u8g2.sendBuffer();
 }
 
@@ -693,7 +831,7 @@ void drawSplash() {
   snprintf(buf, sizeof(buf), "水面: %.1f mbar", g_surfacePressure);
   u8g2.drawUTF8(0, 50, buf);
   snprintf(buf, sizeof(buf), "密度: %.0f kg/m³", g_fluidDensity);
-  u8g2.drawUTF8(0, 64, buf);
+  u8g2.drawUTF8(0, 62, buf);
   u8g2.sendBuffer();
 }
 
@@ -748,9 +886,22 @@ void setup() {
   loadLogFromNVS();
   loadClockFromNVS();
 
+  // 显示开机画面 (含 WiFi 同步状态)
   drawSplash();
+  if (strlen(WIFI_SSID) > 0) {
+    u8g2.setFont(FONT_CN);
+    u8g2.drawUTF8(0, 62, "WiFi 同步中...");
+    u8g2.sendBuffer();
+    bool ok = trySyncNTP();
+    drawSplash();
+    u8g2.setFont(FONT_CN);
+    u8g2.drawUTF8(0, 62, ok ? "时间同步完成" : "WiFi 同步失败");
+    u8g2.sendBuffer();
+    delay(1200);
+  }
+
   beepBlocking(2, 70);
-  delay(700);
+  delay(400);
   g_lastInteractMs = millis();
 }
 
@@ -896,6 +1047,9 @@ void loop() {
     // Update tissues every sample
     updateCompartments(dtMs / 1000.0f, g_depthSmooth);
 
+    // Record temperature sample (rate-limited to 1/min internally)
+    recordTempSample(now);
+
     // Dive state machine
     if (!g_diving && g_depthSmooth > DIVE_START_DEPTH) {
       g_diving = true;
@@ -944,6 +1098,7 @@ void loop() {
     switch (g_page) {
       case PAGE_HUD:      drawHud(g_depthSmooth, g_maxDepth, g_temp, ndl, g_ascentMpm, diveSec); break;
       case PAGE_TISSUE:   drawTissue(g_depthSmooth); break;
+      case PAGE_TEMP:     drawTempChart(); break;
       case PAGE_LASTDIVE: drawLastDive(); break;
       case PAGE_LOG:      drawLogList();  break;
       case PAGE_STATS:    drawStats();    break;
