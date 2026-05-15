@@ -4,14 +4,16 @@ ESP32-S3 + MS5837-30BA + OLED SH1106 + 9042 蜂鸣器 的 DIY 潜水表固件。
 
 ## 硬件接线
 
-| ESP32-S3 | 外设 |
-|---|---|
-| 3V3 | MS5837 VCC、OLED VCC、蜂鸣器(+) |
-| GND | MS5837 GND、OLED GND、S8050 发射极(E) |
-| GPIO 8 (SDA) | MS5837 SDA、OLED SDA |
-| GPIO 9 (SCL) | MS5837 SCL、OLED SCL |
-| GPIO 5 | → 1kΩ → S8050 基极(B) |
-| - | 蜂鸣器(-) → S8050 集电极(C) |
+板子使用 Arduino Nano ESP32 形态，引脚按板上丝印标注。
+
+| 板子丝印 | 内部 GPIO | 外设 |
+|---|---|---|
+| 3V3 | - | MS5837 VCC、OLED VCC、蜂鸣器(+) |
+| GND | - | MS5837 GND、OLED GND、S8050 发射极(E) |
+| **A4** (SDA) | GPIO 11 | MS5837 SDA、OLED SDA |
+| **A5** (SCL) | GPIO 12 | MS5837 SCL、OLED SCL |
+| **D2** | GPIO 5 | → 1kΩ → S8050 基极(B) |
+| - | - | 蜂鸣器(-) → S8050 集电极(C) |
 
 I²C 通常需要 4.7kΩ 上拉到 3V3，但绝大多数 OLED / MS5837 模块板上已自带，可省。
 

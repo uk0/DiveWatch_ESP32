@@ -4,8 +4,9 @@
 
 #include <Wire.h>
 
-#define I2C_SDA 8
-#define I2C_SCL 9
+// Arduino Nano ESP32 board labels: A4 = GPIO 11 (SDA), A5 = GPIO 12 (SCL)
+#define I2C_SDA 11   // wire to board pin labeled "A4"
+#define I2C_SCL 12   // wire to board pin labeled "A5"
 
 void setup() {
   Serial.begin(115200);
