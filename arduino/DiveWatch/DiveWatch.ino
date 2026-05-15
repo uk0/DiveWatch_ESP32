@@ -25,6 +25,8 @@
 #include <U8g2lib.h>
 #include <Preferences.h>
 #include <math.h>
+#include <time.h>
+#include <sys/time.h>
 #include "MS5837.h"
 
 // ================== Forward type declarations =======================
@@ -98,6 +100,13 @@ float    g_batVoltage      = 0.0f;
 uint8_t  g_batPct          = 0;
 bool     g_batPresent      = false;
 uint32_t g_lastBatReadMs   = 0;
+
+// Real-time clock (uses internal RTC, persisted to NVS every minute)
+bool     g_editingTime     = false;
+uint8_t  g_editField       = 0;       // 0 = HH, 1 = MM
+uint8_t  g_editHH          = 12;
+uint8_t  g_editMM          = 0;
+uint32_t g_lastTimeSaveMs  = 0;
 
 // ================== Moving-average filter ============================
 float    g_pressBuf[AVG_WINDOW] = {0};
@@ -307,6 +316,50 @@ void eraseLogNVS() {
   g_diveTotalMaxD = 0;
 }
 
+// ================== Real-time clock ==================================
+void setSystemClock(uint8_t hh, uint8_t mm, uint8_t ss) {
+  struct tm t = {};
+  t.tm_year = 2026 - 1900;
+  t.tm_mon  = 0;          // January
+  t.tm_mday = 1;
+  t.tm_hour = hh;
+  t.tm_min  = mm;
+  t.tm_sec  = ss;
+  time_t epoch = mktime(&t);
+  struct timeval tv = {epoch, 0};
+  settimeofday(&tv, nullptr);
+}
+
+void getCurrentTime(uint8_t &hh, uint8_t &mm, uint8_t &ss) {
+  time_t now;
+  time(&now);
+  struct tm *t = localtime(&now);
+  hh = t->tm_hour;
+  mm = t->tm_min;
+  ss = t->tm_sec;
+}
+
+void saveClockToNVS() {
+  time_t now;
+  time(&now);
+  prefs.begin("dive", false);
+  prefs.putULong("clock", (unsigned long)now);
+  prefs.end();
+}
+
+void loadClockFromNVS() {
+  prefs.begin("dive", true);
+  unsigned long saved = prefs.getULong("clock", 0);
+  prefs.end();
+  if (saved > 0) {
+    struct timeval tv = {(time_t)saved, 0};
+    settimeofday(&tv, nullptr);
+  } else {
+    // First boot ever -> default to 12:00:00
+    setSystemClock(12, 0, 0);
+  }
+}
+
 // ================== Battery ==========================================
 float readBatteryVoltage() {
   uint32_t sum = 0;
@@ -388,10 +441,19 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tr);
 
-  // Top left: dive timer
+  // Top left: current real-time clock HH:MM
   char buf[24];
-  snprintf(buf, sizeof(buf), "%02lu:%02lu", (unsigned long)(diveSec / 60), (unsigned long)(diveSec % 60));
+  uint8_t hh, mm, ss;
+  getCurrentTime(hh, mm, ss);
+  snprintf(buf, sizeof(buf), "%02u:%02u", hh, mm);
   u8g2.drawStr(0, 8, buf);
+
+  // Top center: dive timer (only when actively diving)
+  if (g_diving) {
+    snprintf(buf, sizeof(buf), "[%02lu:%02lu]", (unsigned long)(diveSec / 60), (unsigned long)(diveSec % 60));
+    int w = u8g2.getStrWidth(buf);
+    u8g2.drawStr((128 - w) / 2 - 6, 8, buf);
+  }
 
   // Top right: battery icon + pct + salinity flag
   if (g_batPresent) {
@@ -520,6 +582,34 @@ void drawLogList() {
   u8g2.sendBuffer();
 }
 
+void drawTimeEdit() {
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_6x10_tr);
+  u8g2.drawStr(0, 8, "SET CLOCK");
+  u8g2.drawStr(80, 8, "MODE:OK");
+
+  // Big time display
+  char buf[8];
+  u8g2.setFont(u8g2_font_logisoso28_tn);
+  snprintf(buf, sizeof(buf), "%02u:%02u", g_editHH, g_editMM);
+  int w = u8g2.getStrWidth(buf);
+  int x = (128 - w) / 2;
+  u8g2.drawStr(x, 42, buf);
+
+  // Underline the field being edited
+  // Position of "HH" and "MM" within the rendered string
+  int colonOffset = u8g2.getStrWidth("00");
+  int afterColon  = u8g2.getStrWidth("00:");
+  int hhX = x;
+  int mmX = x + afterColon;
+  if (g_editField == 0) u8g2.drawHLine(hhX, 46, colonOffset);
+  else                  u8g2.drawHLine(mmX, 46, colonOffset);
+
+  u8g2.setFont(u8g2_font_6x10_tr);
+  u8g2.drawStr(0, 60, "UP/DN: +/-   MODE: field");
+  u8g2.sendBuffer();
+}
+
 void drawSplash() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_ncenB12_tr);
@@ -583,6 +673,7 @@ void setup() {
   initCompartmentsToSurface();
 
   loadLogFromNVS();
+  loadClockFromNVS();
 
   drawSplash();
   beepBlocking(2, 70);
@@ -601,47 +692,90 @@ void loop() {
   // ---- Battery (every 5s) ----
   updateBattery(now);
 
-  if (g_btnMode.evShort) {
-    g_btnMode.evShort = false;
-    g_page = (g_page + 1) % PAGE_COUNT;
-    if (g_page == PAGE_LOG) g_logViewIdx = 0;
-  }
-  if (g_btnMode.evLong) {
-    g_btnMode.evLong = false;
-    calibrateSurface();
-  }
-  if (g_btnUp.evShort) {
-    g_btnUp.evShort = false;
-    if (g_page == PAGE_LOG) {
-      if (g_logCount > 0 && g_logViewIdx > 0) g_logViewIdx--;
-    } else {
-      g_maxDepth = 0;
-      Serial.println("[ACTION] Max depth reset");
-      beepBlocking(1, 60);
+  if (g_editingTime) {
+    // ---- Time-edit mode: buttons remapped ----
+    if (g_btnMode.evShort) {
+      g_btnMode.evShort = false;
+      g_editField = 1 - g_editField;     // toggle HH <-> MM
     }
-  }
-  if (g_btnUp.evLong) {
+    if (g_btnMode.evLong) {
+      g_btnMode.evLong = false;
+      // Save and exit
+      setSystemClock(g_editHH, g_editMM, 0);
+      saveClockToNVS();
+      g_editingTime = false;
+      Serial.printf("[ACTION] Clock set to %02u:%02u\n", g_editHH, g_editMM);
+      beepBlocking(2, 80);
+    }
+    if (g_btnUp.evShort) {
+      g_btnUp.evShort = false;
+      if (g_editField == 0) g_editHH = (g_editHH + 1) % 24;
+      else                  g_editMM = (g_editMM + 1) % 60;
+    }
+    if (g_btnDown.evShort) {
+      g_btnDown.evShort = false;
+      if (g_editField == 0) g_editHH = (g_editHH + 23) % 24;
+      else                  g_editMM = (g_editMM + 59) % 60;
+    }
+    // Discard unused long-press events while editing
     g_btnUp.evLong = false;
-    g_fluidDensity = (g_fluidDensity > 1010) ? 997.0f : 1029.0f;
-    if (g_sensorOk) sensor.setFluidDensity(g_fluidDensity);
-    Serial.printf("[ACTION] Density -> %.0f\n", g_fluidDensity);
-    beepBlocking(2, 60);
-  }
-  if (g_btnDown.evShort) {
-    g_btnDown.evShort = false;
-    if (g_page == PAGE_LOG) {
-      if (g_logCount > 0 && g_logViewIdx < g_logCount - 1) g_logViewIdx++;
-    } else if (g_diving) {
-      g_diveStartMs = now;
-      Serial.println("[ACTION] Dive timer reset");
-      beepBlocking(1, 60);
-    }
-  }
-  if (g_btnDown.evLong) {
     g_btnDown.evLong = false;
-    eraseLogNVS();
-    Serial.println("[ACTION] Log erased");
-    beepBlocking(3, 70);
+  } else {
+    // ---- Normal mode ----
+    if (g_btnMode.evShort) {
+      g_btnMode.evShort = false;
+      g_page = (g_page + 1) % PAGE_COUNT;
+      if (g_page == PAGE_LOG) g_logViewIdx = 0;
+    }
+    if (g_btnMode.evLong) {
+      g_btnMode.evLong = false;
+      calibrateSurface();
+    }
+    if (g_btnUp.evShort) {
+      g_btnUp.evShort = false;
+      if (g_page == PAGE_LOG) {
+        if (g_logCount > 0 && g_logViewIdx > 0) g_logViewIdx--;
+      } else {
+        g_maxDepth = 0;
+        Serial.println("[ACTION] Max depth reset");
+        beepBlocking(1, 60);
+      }
+    }
+    if (g_btnUp.evLong) {
+      g_btnUp.evLong = false;
+      g_fluidDensity = (g_fluidDensity > 1010) ? 997.0f : 1029.0f;
+      if (g_sensorOk) sensor.setFluidDensity(g_fluidDensity);
+      Serial.printf("[ACTION] Density -> %.0f\n", g_fluidDensity);
+      beepBlocking(2, 60);
+    }
+    if (g_btnDown.evShort) {
+      g_btnDown.evShort = false;
+      if (g_page == PAGE_LOG) {
+        if (g_logCount > 0 && g_logViewIdx < g_logCount - 1) g_logViewIdx++;
+      } else if (g_diving) {
+        g_diveStartMs = now;
+        Serial.println("[ACTION] Dive timer reset");
+        beepBlocking(1, 60);
+      }
+    }
+    if (g_btnDown.evLong) {
+      g_btnDown.evLong = false;
+      if (g_page == PAGE_LOG) {
+        eraseLogNVS();
+        Serial.println("[ACTION] Log erased");
+        beepBlocking(3, 70);
+      } else {
+        // Enter time-edit mode, prefill with current clock
+        uint8_t hh, mm, ss;
+        getCurrentTime(hh, mm, ss);
+        g_editHH = hh;
+        g_editMM = mm;
+        g_editField = 0;
+        g_editingTime = true;
+        Serial.println("[ACTION] Enter clock edit");
+        beepBlocking(1, 100);
+      }
+    }
   }
 
   // ---- Sample ----
@@ -694,11 +828,21 @@ void loop() {
   float ndl = computeNDL(g_depthSmooth);
 
   // ---- Render ----
-  switch (g_page) {
-    case PAGE_HUD:      drawHud(g_depthSmooth, g_maxDepth, g_temp, ndl, g_ascentMpm, diveSec); break;
-    case PAGE_TISSUE:   drawTissue(g_depthSmooth); break;
-    case PAGE_LASTDIVE: drawLastDive(); break;
-    case PAGE_LOG:      drawLogList();  break;
+  if (g_editingTime) {
+    drawTimeEdit();
+  } else {
+    switch (g_page) {
+      case PAGE_HUD:      drawHud(g_depthSmooth, g_maxDepth, g_temp, ndl, g_ascentMpm, diveSec); break;
+      case PAGE_TISSUE:   drawTissue(g_depthSmooth); break;
+      case PAGE_LASTDIVE: drawLastDive(); break;
+      case PAGE_LOG:      drawLogList();  break;
+    }
+  }
+
+  // ---- Periodic clock save (every 60s) ----
+  if (now - g_lastTimeSaveMs > 60000) {
+    g_lastTimeSaveMs = now;
+    saveClockToNVS();
   }
 
   // ---- Alarms ----
