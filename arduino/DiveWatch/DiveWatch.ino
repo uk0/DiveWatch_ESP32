@@ -46,7 +46,9 @@ struct DiveRecord {
   float    maxDepth;
   uint16_t durationSec;
   float    minTemp;
-  uint8_t  saltwater;
+  uint8_t  saltwater;     // 1 = sea, 0 = fresh
+  uint8_t  _pad;
+  uint32_t endEpoch;      // Unix time when dive ended (0 = unknown)
 };
 
 // ================== Pin map ==========================================
@@ -621,22 +623,35 @@ void drawStats() {
 
   char buf[40];
   snprintf(buf, sizeof(buf), "潜水次数  %u 次", g_diveTotal);
-  u8g2.drawUTF8(0, 24, buf);
+  u8g2.drawUTF8(0, 22, buf);
 
   snprintf(buf, sizeof(buf), "历史最深  %.1f m", g_diveTotalMaxD);
-  u8g2.drawUTF8(0, 36, buf);
+  u8g2.drawUTF8(0, 34, buf);
 
   uint32_t totMin = g_lifetimeUnderwaterSec / 60;
   uint32_t totH   = totMin / 60;
   snprintf(buf, sizeof(buf), "累计水下  %luh%02lum", (unsigned long)totH, (unsigned long)(totMin % 60));
-  u8g2.drawUTF8(0, 48, buf);
+  u8g2.drawUTF8(0, 46, buf);
+
+  // Surface interval since last dive (if any)
+  if (g_logCount > 0 && g_log[0].endEpoch > 0) {
+    time_t nowEpoch;
+    time(&nowEpoch);
+    int32_t intervalSec = (int32_t)((uint32_t)nowEpoch - g_log[0].endEpoch);
+    if (intervalSec >= 0 && intervalSec < 99 * 3600) {
+      snprintf(buf, sizeof(buf), "上次距今 %ldh%02ldm",
+               (long)(intervalSec / 3600), (long)((intervalSec / 60) % 60));
+      u8g2.drawUTF8(0, 58, buf);
+    }
+  }
 
   if (g_batPresent) {
-    snprintf(buf, sizeof(buf), "电池 %.2fV  %u%%", g_batVoltage, g_batPct);
+    snprintf(buf, sizeof(buf), "电 %.2fV %u%%", g_batVoltage, g_batPct);
   } else {
-    snprintf(buf, sizeof(buf), "电池: 未接入");
+    snprintf(buf, sizeof(buf), "电池未接入");
   }
-  u8g2.drawUTF8(0, 62, buf);
+  int w = u8g2.getUTF8Width(buf);
+  u8g2.drawUTF8(128 - w, 10, buf);
 
   u8g2.sendBuffer();
 }
@@ -895,9 +910,19 @@ void loop() {
       // End dive: persist
       uint32_t durSec = (now - g_diveStartMs) / 1000;
       if (durSec >= 30) {  // Ignore tiny accidental triggers
-        DiveRecord rec = {g_maxDepth, (uint16_t)min((uint32_t)0xFFFF, durSec), g_diveMinTemp, (uint8_t)(g_fluidDensity > 1010 ? 1 : 0)};
+        time_t nowEpoch;
+        time(&nowEpoch);
+        DiveRecord rec = {
+          g_maxDepth,
+          (uint16_t)min((uint32_t)0xFFFF, durSec),
+          g_diveMinTemp,
+          (uint8_t)(g_fluidDensity > 1010 ? 1 : 0),
+          0,
+          (uint32_t)nowEpoch
+        };
         saveDiveToNVS(rec);
-        Serial.printf("[DIVE] Saved: max=%.1fm dur=%us minT=%.1fC\n", rec.maxDepth, rec.durationSec, rec.minTemp);
+        Serial.printf("[DIVE] Saved: max=%.1fm dur=%us minT=%.1fC end=%lu\n",
+                      rec.maxDepth, rec.durationSec, rec.minTemp, (unsigned long)rec.endEpoch);
       } else {
         Serial.println("[DIVE] Ended (too short, not saved)");
       }
