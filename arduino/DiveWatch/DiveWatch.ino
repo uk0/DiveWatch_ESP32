@@ -247,7 +247,8 @@ bool g_ssArmCondition = false;
 
 void updateSafetyStop(float depth_m, uint32_t now) {
   if (!g_diving) { g_ss = SS_IDLE; g_ssAccumMs = 0; g_ssArmCondition = false; return; }
-  if (depth_m > 10.0f) g_ssArmCondition = true;
+  // 任何超过 5m 的下潜都触发安全停留(更符合"每潜建议安全停留"标准)
+  if (depth_m > 5.0f) g_ssArmCondition = true;
   if (!g_ssArmCondition) return;
 
   bool inBand = fabsf(depth_m - SAFETY_STOP_DEPTH) <= SAFETY_STOP_BAND;
@@ -574,22 +575,31 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
   getCurrentTime(hh, mm, ss);
 
   // 顶部 y=10 (字符占 1-11)
-  // 左: 时钟  中: 潜水时长[在潜水时]  右: 电池图标 % + 海/淡
+  // 左: 时钟 (0-30)
   snprintf(buf, sizeof(buf), "%02u:%02u", hh, mm);
   u8g2.drawUTF8(0, 10, buf);
 
-  if (g_diving) {
-    snprintf(buf, sizeof(buf), "[%02lu:%02lu]", (unsigned long)(diveSec / 60), (unsigned long)(diveSec % 60));
-    int w = u8g2.getUTF8Width(buf);
-    u8g2.drawUTF8((128 - w) / 2, 10, buf);
-  }
+  // 海/淡 标识固定在最右 (118-128)
+  u8g2.drawUTF8(118, 10, g_fluidDensity > 1010 ? "海" : "淡");
 
-  if (g_batPresent) {
-    drawBatteryIcon(72, 2);
-    snprintf(buf, sizeof(buf), "%d%%", g_batPct);
-    u8g2.drawUTF8(92, 10, buf);
+  if (g_diving) {
+    // 潜水时: 中央显示潜水时长 + 右侧显示纯数字百分比 (无图标避免重叠)
+    snprintf(buf, sizeof(buf), "潜%lu:%02lu", (unsigned long)(diveSec / 60), (unsigned long)(diveSec % 60));
+    int w = u8g2.getUTF8Width(buf);
+    u8g2.drawUTF8(36, 10, buf);  // 紧贴时钟右边
+    if (g_batPresent) {
+      snprintf(buf, sizeof(buf), "%d%%", g_batPct);
+      int pw = u8g2.getUTF8Width(buf);
+      u8g2.drawUTF8(116 - pw, 10, buf);  // 紧贴海/淡左
+    }
+  } else {
+    // 水面时: 显示电池图标 + 百分比 (中央留空)
+    if (g_batPresent) {
+      drawBatteryIcon(72, 2);
+      snprintf(buf, sizeof(buf), "%d%%", g_batPct);
+      u8g2.drawUTF8(92, 10, buf);
+    }
   }
-  u8g2.drawUTF8(115, 10, g_fluidDensity > 1010 ? "海" : "淡");
 
   // 大字深度 y=36 (logisoso24, 字符占 12-36)
   if (depth < 100.0f) snprintf(buf, sizeof(buf), "%4.1f", depth);
