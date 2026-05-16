@@ -768,7 +768,7 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
   if (!ssActive && g_ss != SS_DONE && !decoNow) {
     snprintf(buf, sizeof(buf), "最深%.1f", maxDepth);
     int w = u8g2.getUTF8Width(buf);
-    u8g2.drawUTF8(128 - w, 48, buf);
+    u8g2.drawUTF8(126 - w, 48, buf);
   }
 
   // 底部 y=60 (字符占 48-60, 与中部 36-48 间距 0): 温度 + 上升速率
@@ -777,7 +777,7 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
 
   snprintf(buf, sizeof(buf), "%+.1f米/分", ascentMpm);
   int w = u8g2.getUTF8Width(buf);
-  u8g2.drawUTF8(128 - w, 60, buf);
+  u8g2.drawUTF8(126 - w, 60, buf);
 
   // 警告标志 (右边缘小标识, 避免微超出)
   if (depth > g_alarmDepth)      u8g2.drawUTF8(120, 22, "!");
@@ -797,7 +797,7 @@ void drawTissue(float depth) {
   char buf[32];
   snprintf(buf, sizeof(buf), "最大%3.0f%%", pct);
   int w = u8g2.getUTF8Width(buf);
-  u8g2.drawUTF8(128 - w, 10, buf);
+  u8g2.drawUTF8(126 - w, 10, buf);
 
   // 16 房间柱状图 y=14-46 (高 32)
   int x0 = 0;
@@ -835,7 +835,7 @@ void drawLastDive() {
   char buf[40];
   snprintf(buf, sizeof(buf), "累计%u次", g_diveTotal);
   int w = u8g2.getUTF8Width(buf);
-  u8g2.drawUTF8(128 - w, 10, buf);
+  u8g2.drawUTF8(126 - w, 10, buf);
 
   if (g_logCount == 0) {
     u8g2.drawUTF8(0, 36, "无潜水记录");
@@ -882,7 +882,7 @@ void drawLogList() {
   char buf[40];
   snprintf(buf, sizeof(buf), "%u/%u", g_logViewIdx + 1, g_logCount);
   int w = u8g2.getUTF8Width(buf);
-  u8g2.drawUTF8(128 - w, 10, buf);
+  u8g2.drawUTF8(126 - w, 10, buf);
 
   if (g_logCount == 0) {
     u8g2.drawUTF8(0, 36, "日志为空");
@@ -923,10 +923,10 @@ void drawAir() {
     float currentBarMin = (g_tankVolL > 0) ? (g_currentSacL / g_tankVolL) : 0;
     snprintf(buf, sizeof(buf), "%.1fbar/分", currentBarMin);
     int w = u8g2.getUTF8Width(buf);
-    u8g2.drawUTF8(128 - w, 10, buf);
+    u8g2.drawUTF8(126 - w, 10, buf);
   } else {
     int w = u8g2.getUTF8Width("水面");
-    u8g2.drawUTF8(128 - w, 10, "水面");
+    u8g2.drawUTF8(126 - w, 10, "水面");
   }
 
   // y=22 剩余压力 + 百分比 (主要数据)
@@ -982,7 +982,7 @@ void drawN2() {
   u8g2.drawUTF8(0, 24, buf);
   snprintf(buf, sizeof(buf), "风险 %s", risk);
   int w = u8g2.getUTF8Width(buf);
-  u8g2.drawUTF8(128 - w, 24, buf);
+  u8g2.drawUTF8(126 - w, 24, buf);
 
   // 2. 最快(4min) + 最慢(635min) 组织室饱和度
   float fastSat = computeSaturationPct(0,  g_depthSmooth);
@@ -1026,7 +1026,7 @@ void drawPlan() {
   char buf[40];
   snprintf(buf, sizeof(buf), "当前 %.1fm", g_depthSmooth);
   int w = u8g2.getUTF8Width(buf);
-  u8g2.drawUTF8(128 - w, 10, buf);
+  u8g2.drawUTF8(126 - w, 10, buf);
 
   // y=22 计划深度
   snprintf(buf, sizeof(buf), "计划深度 %u 米", g_planDepthM);
@@ -1069,7 +1069,7 @@ void drawTempChart() {
   // y=10 右上: 采样进度
   snprintf(buf, sizeof(buf), "%u/60", g_tempHistCount);
   int w = u8g2.getUTF8Width(buf);
-  u8g2.drawUTF8(128 - w, 10, buf);
+  u8g2.drawUTF8(126 - w, 10, buf);
 
   if (g_tempHistCount < 2) {
     u8g2.drawUTF8(0, 34, "数据收集中...");
@@ -1142,7 +1142,7 @@ void drawBatHist() {
     snprintf(buf, sizeof(buf), "未接入");
   }
   int w = u8g2.getUTF8Width(buf);
-  u8g2.drawUTF8(128 - w, 10, buf);
+  u8g2.drawUTF8(126 - w, 10, buf);
 
   // 中部说明
   if (g_batHistCount < 2) {
@@ -1199,7 +1199,7 @@ void drawStats() {
   else if (g_batPresent) snprintf(buf, sizeof(buf), "%.2fV %u%%", g_batVoltage, g_batPct);
   else snprintf(buf, sizeof(buf), "未接电池");
   int w = u8g2.getUTF8Width(buf);
-  u8g2.drawUTF8(128 - w, 10, buf);
+  u8g2.drawUTF8(126 - w, 10, buf);
 
   // y=22/34/46/58 (4 行)
   snprintf(buf, sizeof(buf), "潜水次数  %u 次", g_diveTotal);
@@ -1335,7 +1335,7 @@ void drawSettings() {
   u8g2.drawUTF8(0, 10, "设置");
   snprintf(buf, sizeof(buf), "%u/%u", g_settingsItem + 1, SETTINGS_COUNT);
   int w = u8g2.getUTF8Width(buf);
-  u8g2.drawUTF8(128 - w, 10, buf);
+  u8g2.drawUTF8(126 - w, 10, buf);
   drawDivider();
 
   // y=22/34/46/58 (4 项可见, 12px 间距, 不重叠)
@@ -1353,7 +1353,7 @@ void drawSettings() {
     char vbuf[20];
     settingsItemValue(idx, vbuf, sizeof(vbuf));
     int vw = u8g2.getUTF8Width(vbuf);
-    u8g2.drawUTF8(128 - vw, y, vbuf);
+    u8g2.drawUTF8(126 - vw, y, vbuf);
   }
 
   // 滚动指示器: 右侧 ^ / v 表示上下还有更多项
@@ -1499,30 +1499,33 @@ void runSelfTest() {
   digitalWrite(BUZZER_PIN, LOW);
   bool buzzerTested = true;
 
-  // 按钮检查: 长按 MODE 开机时该按键仍可能按住, 先等所有按键释放再判
-  // 提示用户松开按键
-  bool anyHeld = (digitalRead(BTN_MODE_PIN) == LOW) ||
-                 (digitalRead(BTN_UP_PIN)   == LOW) ||
-                 (digitalRead(BTN_DOWN_PIN) == LOW);
-  if (anyHeld) {
-    u8g2.clearBuffer();
-    u8g2.drawUTF8(0, 12, "系统自检");
-    u8g2.drawUTF8(0, 28, "正在检测...");
-    u8g2.drawUTF8(0, 50, "请松开按键");
-    u8g2.sendBuffer();
-    unsigned long waitStart = millis();
-    while (millis() - waitStart < 3500) {
-      bool allUp = (digitalRead(BTN_MODE_PIN) == HIGH) &&
-                   (digitalRead(BTN_UP_PIN)   == HIGH) &&
-                   (digitalRead(BTN_DOWN_PIN) == HIGH);
-      if (allUp) { delay(50); break; }   // 全部释放, 稳定 50ms 再退出
-      delay(50);
+  // 按钮检查: 长按开机时按键仍可能按住; 抖动也可能瞬时 LOW
+  // 策略: 提示松开 + 等待至少 500ms 连续 HIGH 才算 OK (容忍弹簧抖动)
+  auto checkBtnStable = [](uint8_t pin, uint32_t timeoutMs) -> bool {
+    unsigned long deadline = millis() + timeoutMs;
+    unsigned long stableStart = millis();
+    while (millis() < deadline) {
+      if (digitalRead(pin) == LOW) {
+        stableStart = millis();   // 检测到按下/抖动, 重置稳定计时
+      } else if (millis() - stableStart >= 500) {
+        return true;              // 连续 500ms HIGH = 真的释放
+      }
+      delay(20);
     }
-  }
+    return false;
+  };
 
-  bool btnOK = (digitalRead(BTN_MODE_PIN) == HIGH) &&
-               (digitalRead(BTN_UP_PIN)   == HIGH) &&
-               (digitalRead(BTN_DOWN_PIN) == HIGH);
+  // 显示"请松开按键"提示, 给用户最多 4 秒释放时间
+  u8g2.clearBuffer();
+  u8g2.drawUTF8(0, 12, "系统自检");
+  u8g2.drawUTF8(0, 28, "正在检测...");
+  u8g2.drawUTF8(0, 50, "请松开按键");
+  u8g2.sendBuffer();
+
+  bool btnMOK = checkBtnStable(BTN_MODE_PIN, 4000);
+  bool btnUOK = checkBtnStable(BTN_UP_PIN,   1000);
+  bool btnDOK = checkBtnStable(BTN_DOWN_PIN, 1000);
+  bool btnOK  = btnMOK && btnUOK && btnDOK;
 
   // 显示自检结果
   u8g2.clearBuffer();
@@ -1532,13 +1535,17 @@ void runSelfTest() {
   u8g2.drawUTF8(0, 26, buf);
   snprintf(buf, sizeof(buf), "MS5837     %s", ms5837OK ? "正常" : "异常");
   u8g2.drawUTF8(0, 38, buf);
-  snprintf(buf, sizeof(buf), "按键       %s", btnOK ? "正常" : "异常");
+  snprintf(buf, sizeof(buf), "键 M:%s U:%s D:%s",
+           btnMOK ? "OK" : "X",
+           btnUOK ? "OK" : "X",
+           btnDOK ? "OK" : "X");
   u8g2.drawUTF8(0, 50, buf);
   snprintf(buf, sizeof(buf), "蜂鸣器     %s", buzzerTested ? "已测试" : "异常");
   u8g2.drawUTF8(0, 62, buf);
   u8g2.sendBuffer();
-  Serial.printf("[SELF-TEST] OLED=%d MS5837=%d BTN=%d\n", oledOK, ms5837OK, btnOK);
-  delay(1500);
+  Serial.printf("[SELF-TEST] OLED=%d MS5837=%d BTN_M=%d BTN_U=%d BTN_D=%d\n",
+                oledOK, ms5837OK, btnMOK, btnUOK, btnDOK);
+  delay(2000);
 }
 
 // ================== Setup ============================================
@@ -1611,6 +1618,17 @@ void setup() {
 
   beepBlocking(2, 70);
   delay(400);
+
+  // 显式回到主 HUD 页, 重置任何残留状态 (防止开机进错页)
+  g_page = PAGE_HUD;
+  g_editingTime = false;
+  g_inSettings  = false;
+  g_screenOff   = false;
+  // 清空可能因 setup 期间按键抖动产生的事件
+  g_btnMode.evShort = g_btnMode.evLong = false;
+  g_btnUp.evShort   = g_btnUp.evLong   = false;
+  g_btnDown.evShort = g_btnDown.evLong = false;
+
   g_lastInteractMs = millis();
 }
 
