@@ -274,13 +274,60 @@ float estimateAltitudeM() {
 // Highest tissue load percent vs M-value at current depth (0..100+)
 float computeTissueLoadPct(float depth_m) {
   float pAmb_bar = (g_surfacePressure / 1000.0f) + depth_m * g_fluidDensity * 9.80665f / 1e5f;
+  float consFactor = (float)g_conservatism / 100.0f;
   float maxPct = 0;
   for (int i = 0; i < 16; i++) {
-    float Mv = pAmb_bar / B_N2[i] + A_N2[i];
+    float Mv = (pAmb_bar / B_N2[i] + A_N2[i]) / consFactor;
     float pct = (g_pN2[i] / Mv) * 100.0f;
     if (pct > maxPct) maxPct = pct;
   }
   return maxPct;
+}
+
+// 单个组织室的"饱和度": 当前 P_N2 相对于该深度平衡值的百分比
+// 0% = 水面平衡, 100% = 已在此深度完全饱和
+float computeSaturationPct(int idx, float depth_m) {
+  float pSurface = 0.79f * (g_surfacePressure / 1000.0f);
+  float pCurrentDepth = 0.79f * ((g_surfacePressure / 1000.0f) + depth_m * g_fluidDensity * 9.80665f / 1e5f);
+  if (pCurrentDepth <= pSurface) return 100.0f;  // 水面或正在脱饱和
+  float pct = (g_pN2[idx] - pSurface) / (pCurrentDepth - pSurface) * 100.0f;
+  if (pct < 0)   pct = 0;
+  if (pct > 100) pct = 100;
+  return pct;
+}
+
+// 禁飞时间 (小时): 标准飞行环境压力 600 mbar (~0.6 bar)
+// 公开算法: 每个组织室回到 < 飞行环境 M-value 所需最长时间
+// 参考 DAN / PADI / DCIEM 标准: 单次潜水 12-18h, 多次潜水 18-24h
+float computeNoFlyTimeHours() {
+  const float pAmb_fly_bar = 0.600f;     // 飞机巡航舱压
+  const float pAlv_fly = 0.79f * pAmb_fly_bar;
+  float consFactor = (float)g_conservatism / 100.0f;
+  float maxHours = 0;
+  for (int i = 0; i < 16; i++) {
+    float Mv = (pAmb_fly_bar / B_N2[i] + A_N2[i]) / consFactor;
+    if (g_pN2[i] <= Mv) continue;          // 已在飞行 M-value 之下, 可飞
+    if (g_pN2[i] <= pAlv_fly) continue;
+    float ratio = (Mv - pAlv_fly) / (g_pN2[i] - pAlv_fly);
+    if (ratio <= 0 || ratio >= 1) continue;
+    float k = 0.6931472f / (HALF_TIMES_N2[i] * 60.0f);
+    float hours = -logf(ratio) / k / 3600.0f;
+    if (hours > maxHours) maxHours = hours;
+  }
+  return maxHours;
+}
+
+// 完全脱饱和时间 (小时): 所有组织室回到 ~ 水面平衡 (5% 容差)
+// 经典假设: 5 个半衰期 (~97% 脱饱和)
+float computeFullDesaturationHours() {
+  float pSurface = 0.79f * (g_surfacePressure / 1000.0f);
+  float maxHours = 0;
+  for (int i = 0; i < 16; i++) {
+    if (g_pN2[i] <= pSurface * 1.05f) continue;   // 已基本平衡
+    float hours = 5.0f * HALF_TIMES_N2[i] / 60.0f;
+    if (hours > maxHours) maxHours = hours;
+  }
+  return maxHours;
 }
 
 // ================== Safety stop state ================================
@@ -350,7 +397,7 @@ void btnPoll(Button &b, uint32_t now) {
 }
 
 // ================== UI pages =========================================
-enum Page : uint8_t { PAGE_HUD = 0, PAGE_TISSUE, PAGE_PLAN, PAGE_AIR, PAGE_TEMP, PAGE_BAT, PAGE_LASTDIVE, PAGE_LOG, PAGE_STATS, PAGE_COUNT };
+enum Page : uint8_t { PAGE_HUD = 0, PAGE_TISSUE, PAGE_N2, PAGE_PLAN, PAGE_AIR, PAGE_TEMP, PAGE_BAT, PAGE_LASTDIVE, PAGE_LOG, PAGE_STATS, PAGE_COUNT };
 uint8_t g_page = PAGE_HUD;
 uint8_t g_logViewIdx = 0;
 
@@ -912,6 +959,60 @@ void drawAir() {
   if (fillW < 0) fillW = 0;
   if (fillW > 126) fillW = 126;
   if (fillW > 0) u8g2.drawBox(1, barY + 1, fillW, barH - 2);
+
+  u8g2.sendBuffer();
+}
+
+// 体内氮气安全页 - 基于 ZHL-16C 衍生指标
+void drawN2() {
+  u8g2.clearBuffer();
+  u8g2.setFont(FONT_CN);
+  u8g2.drawUTF8(0, 10, "体内氮气");
+  drawDivider();
+
+  char buf[40];
+  // 1. 氮气负荷 % + 风险等级 (左/右)
+  float loadPct = computeTissueLoadPct(g_depthSmooth);
+  const char* risk;
+  if (loadPct < 60.0f)      risk = "低";
+  else if (loadPct < 80.0f) risk = "中";
+  else                       risk = "高";
+
+  snprintf(buf, sizeof(buf), "负荷 %.0f%%", loadPct);
+  u8g2.drawUTF8(0, 24, buf);
+  snprintf(buf, sizeof(buf), "风险 %s", risk);
+  int w = u8g2.getUTF8Width(buf);
+  u8g2.drawUTF8(128 - w, 24, buf);
+
+  // 2. 最快(4min) + 最慢(635min) 组织室饱和度
+  float fastSat = computeSaturationPct(0,  g_depthSmooth);
+  float slowSat = computeSaturationPct(15, g_depthSmooth);
+  snprintf(buf, sizeof(buf), "快%.0f%% 慢%.0f%% (16室)", fastSat, slowSat);
+  u8g2.drawUTF8(0, 36, buf);
+
+  // 3. 禁飞时间 (NoFly time)
+  float noFlyH = computeNoFlyTimeHours();
+  if (noFlyH < 0.05f) {
+    snprintf(buf, sizeof(buf), "禁飞   可飞行");
+  } else if (noFlyH < 100.0f) {
+    int h = (int)noFlyH;
+    int m = (int)((noFlyH - h) * 60);
+    snprintf(buf, sizeof(buf), "禁飞   %dh%02dm", h, m);
+  } else {
+    snprintf(buf, sizeof(buf), "禁飞   >100h");
+  }
+  u8g2.drawUTF8(0, 48, buf);
+
+  // 4. 完全脱饱和时间
+  float desatH = computeFullDesaturationHours();
+  if (desatH < 0.05f) {
+    snprintf(buf, sizeof(buf), "脱饱和 已完成");
+  } else if (desatH < 100.0f) {
+    snprintf(buf, sizeof(buf), "脱饱和 %.0fh", desatH);
+  } else {
+    snprintf(buf, sizeof(buf), "脱饱和 >100h");
+  }
+  u8g2.drawUTF8(0, 60, buf);
 
   u8g2.sendBuffer();
 }
@@ -1777,6 +1878,7 @@ void loop() {
     switch (g_page) {
       case PAGE_HUD:      drawHud(g_depthSmooth, g_maxDepth, g_temp, ndl, g_ascentMpm, diveSec); break;
       case PAGE_TISSUE:   drawTissue(g_depthSmooth); break;
+      case PAGE_N2:       drawN2(); break;
       case PAGE_PLAN:     drawPlan(); break;
       case PAGE_AIR:      drawAir(); break;
       case PAGE_TEMP:     drawTempChart(); break;
