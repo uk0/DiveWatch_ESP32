@@ -634,6 +634,11 @@ float depthFromPressure(float pressureMbar) {
 //   行 baseline y: 10, 22, 34, 46, 58 (12 像素间距, 不重叠)
 //   大字 baseline: 36 (logisoso24, 字符占 12-36)
 // HUD 4 段: 顶 y=10 / 大字 y=36 / 中 y=48 / 底 y=60
+
+// 通用页眉分隔线 (标题下方 y=12, 横跨整屏)
+inline void drawDivider() {
+  u8g2.drawHLine(0, 12, 128);
+}
 void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm, uint32_t diveSec) {
   u8g2.clearBuffer();
   u8g2.setFont(FONT_CN);
@@ -669,16 +674,28 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
     }
   }
 
+  // 报警状态检测 (用于大字反色显示)
+  bool depthAlarm = depth > g_alarmDepth;
+  bool decoAlarm  = (ndl <= 0.0f) && g_diving;
+  bool alarmRev   = depthAlarm || decoAlarm;
+
   // 大字深度 y=36 (logisoso24, 字符占 12-36)
   if (depth < 100.0f) snprintf(buf, sizeof(buf), "%4.1f", depth);
   else                snprintf(buf, sizeof(buf), "%4.0f", depth);
   u8g2.setFont(u8g2_font_logisoso24_tn);
   int dw = u8g2.getStrWidth(buf);
-  int dx = (128 - dw - 14) / 2;  // 给右侧 "米" 留出空间
+  int dx = (128 - dw - 14) / 2;
   if (dx < 0) dx = 0;
+
+  // 警告时大字区域反色 (黑底白字)
+  if (alarmRev) {
+    u8g2.drawBox(0, 13, 128, 25);          // 实心黑色块覆盖大字区
+    u8g2.setDrawColor(0);                  // 之后画的内容反色 (变白)
+  }
   u8g2.drawStr(dx, 36, buf);
   u8g2.setFont(FONT_CN);
   u8g2.drawUTF8(dx + dw + 2, 34, "米");
+  if (alarmRev) u8g2.setDrawColor(1);     // 恢复正常颜色
 
   // 中部 y=48: NDL / 状态 (左) + 最深 (右)
   // 安全停留/减压等关键状态时让出整行, 不挤"最深"
@@ -727,6 +744,7 @@ void drawTissue(float depth) {
   u8g2.setFont(FONT_CN);
   // y=10 标题 + 最大百分比
   u8g2.drawUTF8(0, 10, "组织负荷");
+  drawDivider();
 
   float pct = computeTissueLoadPct(depth);
   char buf[32];
@@ -766,6 +784,7 @@ void drawLastDive() {
   u8g2.setFont(FONT_CN);
   // y=10 标题 + 累计
   u8g2.drawUTF8(0, 10, "上次潜水");
+  drawDivider();
   char buf[40];
   snprintf(buf, sizeof(buf), "累计%u次", g_diveTotal);
   int w = u8g2.getUTF8Width(buf);
@@ -812,6 +831,7 @@ void drawLogList() {
   u8g2.setFont(FONT_CN);
   // y=10 标题 + N/M
   u8g2.drawUTF8(0, 10, "潜水日志");
+  drawDivider();
   char buf[40];
   snprintf(buf, sizeof(buf), "%u/%u", g_logViewIdx + 1, g_logCount);
   int w = u8g2.getUTF8Width(buf);
@@ -851,6 +871,7 @@ void drawAir() {
   uint16_t total_L = totalAirL();   // 当前满瓶总气量 L
   // y=10 标题 + 当前消耗速率 (bar/min)
   u8g2.drawUTF8(0, 10, "气量监控");
+  drawDivider();
   if (g_diving && g_currentSacL > 0.1f) {
     float currentBarMin = (g_tankVolL > 0) ? (g_currentSacL / g_tankVolL) : 0;
     snprintf(buf, sizeof(buf), "%.1fbar/分", currentBarMin);
@@ -900,6 +921,7 @@ void drawPlan() {
   u8g2.setFont(FONT_CN);
   // y=10 标题 + 当前深度
   u8g2.drawUTF8(0, 10, "潜水规划");
+  drawDivider();
   char buf[40];
   snprintf(buf, sizeof(buf), "当前 %.1fm", g_depthSmooth);
   int w = u8g2.getUTF8Width(buf);
@@ -941,6 +963,7 @@ void drawTempChart() {
   // y=10 标题 + 当前温度
   snprintf(buf, sizeof(buf), "温度 %.1f度", g_temp);
   u8g2.drawUTF8(0, 10, buf);
+  drawDivider();
 
   // y=10 右上: 采样进度
   snprintf(buf, sizeof(buf), "%u/60", g_tempHistCount);
@@ -1011,6 +1034,7 @@ void drawBatHist() {
   // y=10 标题 + 当前电压/百分比
   char buf[40];
   u8g2.drawUTF8(0, 10, "电池趋势");
+  drawDivider();
   if (g_batPresent) {
     snprintf(buf, sizeof(buf), "%.2fV %u%%", g_batVoltage, g_batPct);
   } else {
@@ -1065,6 +1089,7 @@ void drawStats() {
   u8g2.setFont(FONT_CN);
   // y=10 标题 + 电池
   u8g2.drawUTF8(0, 10, "总览统计");
+  drawDivider();
 
   char buf[40];
   // 标题右: 海拔 (海平面附近不显示)
@@ -1210,6 +1235,7 @@ void drawSettings() {
   snprintf(buf, sizeof(buf), "%u/%u", g_settingsItem + 1, SETTINGS_COUNT);
   int w = u8g2.getUTF8Width(buf);
   u8g2.drawUTF8(128 - w, 10, buf);
+  drawDivider();
 
   // y=22/34/46/58 (4 项可见, 12px 间距, 不重叠)
   const int VISIBLE = 4;
@@ -1228,6 +1254,10 @@ void drawSettings() {
     int vw = u8g2.getUTF8Width(vbuf);
     u8g2.drawUTF8(128 - vw, y, vbuf);
   }
+
+  // 滚动指示器: 右侧 ^ / v 表示上下还有更多项
+  if (first > 0)                            u8g2.drawUTF8(122, 22, "^");
+  if (first + VISIBLE < SETTINGS_COUNT)     u8g2.drawUTF8(122, 58, "v");
 }
 
 void drawSettingsAndSend() {
@@ -1242,6 +1272,7 @@ void drawTimeEdit() {
   u8g2.drawUTF8(0, 10, "设置时间");
   // 右对齐: MODE确定 = 4*6 + 2*12 = 48px, x=80 -> 80-128 刚好不溢出
   u8g2.drawUTF8(80, 10, "MODE确定");
+  drawDivider();
 
   // 大字时间 y=40 (logisoso24, 字符 16-40)
   char buf[8];
