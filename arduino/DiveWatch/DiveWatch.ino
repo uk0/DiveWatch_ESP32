@@ -680,33 +680,39 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
   u8g2.setFont(FONT_CN);
   u8g2.drawUTF8(dx + dw + 2, 34, "米");
 
-  // 中部 y=48 (字符占 36-48, 与大字间距 0): NDL / 状态
-  if (g_ss == SS_RUNNING || g_ss == SS_ARMED) {
+  // 中部 y=48: NDL / 状态 (左) + 最深 (右)
+  // 安全停留/减压等关键状态时让出整行, 不挤"最深"
+  bool ssActive = (g_ss == SS_RUNNING || g_ss == SS_ARMED);
+  bool decoNow  = (ndl <= 0.0f) && g_diving;
+
+  if (ssActive) {
     uint32_t remain = (g_ssAccumMs >= g_safetyStopSec * 1000UL) ? 0 : (g_safetyStopSec * 1000UL - g_ssAccumMs);
-    snprintf(buf, sizeof(buf), "安全停%lu秒", (unsigned long)(remain / 1000));
+    snprintf(buf, sizeof(buf), "安全停留 %lu 秒", (unsigned long)(remain / 1000));
     u8g2.drawUTF8(0, 48, buf);
   } else if (g_ss == SS_DONE) {
     u8g2.drawUTF8(0, 48, "安全停留完成");
+  } else if (decoNow) {
+    u8g2.drawUTF8(0, 48, "需要减压!");
   } else if (ndl >= 99.0f) {
-    u8g2.drawUTF8(0, 48, "NDL>99分");
-  } else if (ndl <= 0.0f) {
-    u8g2.drawUTF8(0, 48, "需减压!");
+    u8g2.drawUTF8(0, 48, "NDL >99 分");
   } else {
-    snprintf(buf, sizeof(buf), "NDL %2.0f分", ndl);
+    snprintf(buf, sizeof(buf), "NDL %2.0f 分", ndl);
     u8g2.drawUTF8(0, 48, buf);
   }
 
-  // 中部右: 最深
-  snprintf(buf, sizeof(buf), "最深%.1f", maxDepth);
-  int w = u8g2.getUTF8Width(buf);
-  u8g2.drawUTF8(128 - w, 48, buf);
+  // 中部右: 最深 (仅在非关键状态时显示, 避免与左边状态字挤)
+  if (!ssActive && g_ss != SS_DONE && !decoNow) {
+    snprintf(buf, sizeof(buf), "最深%.1f", maxDepth);
+    int w = u8g2.getUTF8Width(buf);
+    u8g2.drawUTF8(128 - w, 48, buf);
+  }
 
   // 底部 y=60 (字符占 48-60, 与中部 36-48 间距 0): 温度 + 上升速率
   snprintf(buf, sizeof(buf), "%.1f度", temp);
   u8g2.drawUTF8(0, 60, buf);
 
   snprintf(buf, sizeof(buf), "%+.1f米/分", ascentMpm);
-  w = u8g2.getUTF8Width(buf);
+  int w = u8g2.getUTF8Width(buf);
   u8g2.drawUTF8(128 - w, 60, buf);
 
   // 警告标志 (右上角小标识)
@@ -1760,4 +1766,20 @@ void loop() {
                 ndl, g_ss, g_page, g_diving ? 'Y' : 'N',
                 g_batVoltage, g_batPct,
                 digitalRead(BTN_MODE_PIN), digitalRead(BTN_UP_PIN), digitalRead(BTN_DOWN_PIN));
+
+  // ---- Light Sleep: 屏保期间深度省电 (~5-10mA, 比 80MHz 待机更省) ----
+  // 仅在: 屏保激活 + 非潜水 + 非编辑/设置 模式下进入
+  if (g_screenOff && !g_diving && !g_editingTime && !g_inSettings) {
+    Serial.flush();
+    // 唤醒源: 任一按键 (GPIO LOW) 或 5 秒 timer (定期醒来更新电池)
+    esp_sleep_enable_ext1_wakeup(
+      (1ULL << BTN_MODE_PIN) | (1ULL << BTN_UP_PIN) | (1ULL << BTN_DOWN_PIN),
+      ESP_EXT1_WAKEUP_ANY_LOW
+    );
+    esp_sleep_enable_timer_wakeup(5ULL * 1000 * 1000);
+    esp_light_sleep_start();
+    // 醒来后 loop 自然继续到下一帧
+    // 按键醒 -> 下次 loop 顶部 anyBtnEvent 触发屏幕唤醒
+    // Timer 醒 -> 更新一次电池/MS5837, 再次睡
+  }
 }
