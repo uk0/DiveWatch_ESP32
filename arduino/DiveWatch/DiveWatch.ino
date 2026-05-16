@@ -88,9 +88,11 @@ static const float    SURFACE_DEPTH       = 0.5f;
 static const float    DIVE_START_DEPTH    = 1.2f;
 static const float    SAFETY_STOP_DEPTH   = 5.0f;
 static const float    SAFETY_STOP_BAND    = 1.5f;
-static const uint32_t SAMPLE_MS           = 200;
+static const uint32_t SAMPLE_MS           = 100;     // 200→100ms 提升 UI 顺滑度
 static const uint32_t REARM_BEEP_MS       = 1500;
 static const uint8_t  AVG_WINDOW          = 5;
+static const uint32_t CPU_FREQ_ACTIVE     = 240;     // MHz, 正常工作
+static const uint32_t CPU_FREQ_IDLE       = 80;      // MHz, 屏保时降频省电
 
 // ================== 可调参数 (设置菜单可改, 持久化) ==================
 float    g_alarmDepth      = 30.0f;     // 深度报警 m
@@ -1395,7 +1397,7 @@ void setup() {
   pinMode(BTN_DOWN_PIN, INPUT_PULLUP);
 
   Wire.begin(I2C_SDA, I2C_SCL);
-  Wire.setClock(400000);
+  Wire.setClock(800000);  // SH1106 标 400k, 实测多数模块能稳跑 800k, 帧时间 23→11ms
 
   u8g2.begin();
   drawSplash();
@@ -1480,6 +1482,8 @@ void loop() {
     if (g_screenOff) {
       g_screenOff = false;
       u8g2.setPowerSave(0);
+      setCpuFrequencyMhz(CPU_FREQ_ACTIVE);  // 唤醒回 240MHz
+      Serial.println("[POWER] CPU 240MHz / OLED on");
       // Consume the wake-up button event (don't trigger an action)
       if (anyBtnEvent) {
         g_btnMode.evShort = g_btnMode.evLong = false;
@@ -1492,7 +1496,8 @@ void loop() {
       (now - g_lastInteractMs > g_screenOffMs)) {
     g_screenOff = true;
     u8g2.setPowerSave(1);
-    Serial.println("[POWER] OLED off (idle)");
+    setCpuFrequencyMhz(CPU_FREQ_IDLE);     // 降 80MHz 省电 ~30%
+    Serial.println("[POWER] CPU 80MHz / OLED off");
   }
 
   // ---- Battery (every 5s) ----
