@@ -1367,7 +1367,27 @@ void runSelfTest() {
   digitalWrite(BUZZER_PIN, LOW);
   bool buzzerTested = true;
 
-  // 按钮检查 (未按状态应为 HIGH)
+  // 按钮检查: 长按 MODE 开机时该按键仍可能按住, 先等所有按键释放再判
+  // 提示用户松开按键
+  bool anyHeld = (digitalRead(BTN_MODE_PIN) == LOW) ||
+                 (digitalRead(BTN_UP_PIN)   == LOW) ||
+                 (digitalRead(BTN_DOWN_PIN) == LOW);
+  if (anyHeld) {
+    u8g2.clearBuffer();
+    u8g2.drawUTF8(0, 12, "系统自检");
+    u8g2.drawUTF8(0, 28, "正在检测...");
+    u8g2.drawUTF8(0, 50, "请松开按键");
+    u8g2.sendBuffer();
+    unsigned long waitStart = millis();
+    while (millis() - waitStart < 3500) {
+      bool allUp = (digitalRead(BTN_MODE_PIN) == HIGH) &&
+                   (digitalRead(BTN_UP_PIN)   == HIGH) &&
+                   (digitalRead(BTN_DOWN_PIN) == HIGH);
+      if (allUp) { delay(50); break; }   // 全部释放, 稳定 50ms 再退出
+      delay(50);
+    }
+  }
+
   bool btnOK = (digitalRead(BTN_MODE_PIN) == HIGH) &&
                (digitalRead(BTN_UP_PIN)   == HIGH) &&
                (digitalRead(BTN_DOWN_PIN) == HIGH);
