@@ -25,6 +25,7 @@
 #include <U8g2lib.h>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <esp_sleep.h>
 #include <math.h>
 #include <time.h>
 #include <sys/time.h>
@@ -1282,6 +1283,60 @@ void drawError(const char *l1, const char *l2 = nullptr) {
   u8g2.sendBuffer();
 }
 
+// 进入深度睡眠 (软关机): ~10μA 功耗
+// 唤醒源 = MODE 按键 (BTN_MODE_PIN = GPIO 6, RTC IO, LOW 触发)
+void enterDeepSleep() {
+  Serial.println("[POWER] 准备关机, 进入深度睡眠...");
+  saveClockToNVS();
+  saveSettingsToNVS();
+
+  // 显示"关机中"画面
+  u8g2.setPowerSave(0);
+  u8g2.clearBuffer();
+  u8g2.setFont(FONT_CN);
+  u8g2.drawUTF8(0, 16, "正在关机...");
+  u8g2.drawUTF8(0, 36, "再次长按 MODE");
+  u8g2.drawUTF8(0, 50, "2 秒以上即可开机");
+  u8g2.sendBuffer();
+
+  // 蜂鸣 3 长声做关机提示
+  beepBlocking(3, 250, 150);
+  delay(800);
+
+  // 关 OLED + WiFi
+  u8g2.setPowerSave(1);
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+
+  // 设置唤醒源: MODE 按键 (RTC GPIO 6) 拉低触发
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)BTN_MODE_PIN, 0);
+
+  Serial.flush();
+  delay(50);
+  esp_deep_sleep_start();
+  // 不会返回, 唤醒后从 setup() 重新执行
+}
+
+// 唤醒后验证: 按键必须持续按下 ≥ 2 秒才算"真正开机"
+// 否则视为误触 / 短按, 立刻回深度睡眠
+void verifyWakeOrSleepAgain() {
+  esp_sleep_wakeup_cause_t reason = esp_sleep_get_wakeup_cause();
+  if (reason != ESP_SLEEP_WAKEUP_EXT0) return;  // 非按键唤醒(首次冷启动等), 不验证
+
+  pinMode(BTN_MODE_PIN, INPUT_PULLUP);
+  delay(20);  // 等 GPIO 稳定
+  unsigned long pressStart = millis();
+  while (digitalRead(BTN_MODE_PIN) == LOW && millis() - pressStart < 2200) {
+    delay(50);
+  }
+  if (digitalRead(BTN_MODE_PIN) == HIGH) {
+    // 按键已释放, 不足 2 秒 → 视为误触, 立刻回睡
+    esp_sleep_enable_ext0_wakeup((gpio_num_t)BTN_MODE_PIN, 0);
+    esp_deep_sleep_start();
+  }
+  // 按够 2 秒, 继续正常 setup
+}
+
 // 开机自检: I2C 设备 + 按钮 + 蜂鸣器
 void runSelfTest() {
   u8g2.clearBuffer();
@@ -1327,6 +1382,9 @@ void runSelfTest() {
 
 // ================== Setup ============================================
 void setup() {
+  // 最先检测唤醒源: 如果是按键唤醒但按时不够 2s, 立刻回睡 (不开机)
+  verifyWakeOrSleepAgain();
+
   Serial.begin(115200);
   delay(120);
 
@@ -1403,6 +1461,15 @@ void loop() {
   btnPoll(g_btnMode, now);
   btnPoll(g_btnUp,   now);
   btnPoll(g_btnDown, now);
+
+  // ---- 长按 MODE 5 秒 -> 关机 (深度睡眠) ----
+  static bool s_shutdownArmed = false;
+  if (!g_btnMode.stable && (now - g_btnMode.pressedAtMs) > 5000 && !s_shutdownArmed) {
+    s_shutdownArmed = true;
+    enterDeepSleep();
+    // 不会返回
+  }
+  if (g_btnMode.stable) s_shutdownArmed = false;  // 松手重置
 
   // ---- Power saving: wake / sleep OLED ----
   bool anyBtnEvent = g_btnMode.evShort || g_btnMode.evLong ||
