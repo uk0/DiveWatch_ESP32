@@ -789,11 +789,11 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
   int w = u8g2.getUTF8Width(buf);
   u8g2.drawUTF8(126 - w, 60, buf);
 
-  // 警告标志 (右边缘小标识, 避免微超出)
-  if (depth > g_alarmDepth)            u8g2.drawUTF8(120, 22, "!");
-  if (ascentMpm > g_ascentLimit)       u8g2.drawUTF8(120, 34, "^");  // 上升过快
+  // 警告标志 (右边缘 x=118 留 4px 边距)
+  if (depth > g_alarmDepth)            u8g2.drawUTF8(118, 22, "!");
+  if (ascentMpm > g_ascentLimit)       u8g2.drawUTF8(118, 34, "^");  // 上升过快
   if (-ascentMpm > g_descentLimit && g_diving)
-                                        u8g2.drawUTF8(120, 60, "v");  // 下降过快
+                                        u8g2.drawUTF8(118, 60, "v");  // 下降过快
 
   u8g2.sendBuffer();
 }
@@ -979,7 +979,7 @@ void drawAir() {
 void drawN2() {
   u8g2.clearBuffer();
   u8g2.setFont(FONT_CN);
-  u8g2.drawUTF8(0, 10, "体内氮气");
+  u8g2.drawUTF8(0, 10, "体内氮气 ZHL-16");
   drawDivider();
 
   char buf[40];
@@ -999,7 +999,7 @@ void drawN2() {
   // 2. 最快(4min) + 最慢(635min) 组织室饱和度
   float fastSat = computeSaturationPct(0,  g_depthSmooth);
   float slowSat = computeSaturationPct(15, g_depthSmooth);
-  snprintf(buf, sizeof(buf), "快%.0f%% 慢%.0f%% (16室)", fastSat, slowSat);
+  snprintf(buf, sizeof(buf), "快 %.0f%%  慢 %.0f%%", fastSat, slowSat);
   u8g2.drawUTF8(0, 36, buf);
 
   // 3. 禁飞时间 (NoFly time)
@@ -1374,9 +1374,9 @@ void drawSettings() {
     u8g2.drawUTF8(126 - vw, y, vbuf);
   }
 
-  // 滚动指示器: 右侧 ^ / v 表示上下还有更多项
-  if (first > 0)                            u8g2.drawUTF8(122, 22, "^");
-  if (first + VISIBLE < SETTINGS_COUNT)     u8g2.drawUTF8(122, 58, "v");
+  // 滚动指示器: 右侧 ^ / v 表示上下还有更多项 (x=118 留 4px 边距)
+  if (first > 0)                            u8g2.drawUTF8(118, 22, "^");
+  if (first + VISIBLE < SETTINGS_COUNT)     u8g2.drawUTF8(118, 58, "v");
 }
 
 void drawSettingsAndSend() {
@@ -1389,8 +1389,8 @@ void drawTimeEdit() {
   u8g2.setFont(FONT_CN);
   // y=10 标题 + MODE 提示
   u8g2.drawUTF8(0, 10, "设置时间");
-  // 右对齐: MODE确定 = 4*6 + 2*12 = 48px, x=80 -> 80-128 刚好不溢出
-  u8g2.drawUTF8(80, 10, "MODE确定");
+  // 右对齐: "MODE OK" 7 字符 = 42px, x=82 -> 82-124 留 4px 边距
+  u8g2.drawUTF8(82, 10, "MODE OK");
   drawDivider();
 
   // 大字时间 y=40 (logisoso24, 字符 16-40)
