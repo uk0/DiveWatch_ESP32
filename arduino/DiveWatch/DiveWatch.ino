@@ -75,8 +75,10 @@ struct DiveRecord {
 #define BTN_DOWN_PIN  10
 #define BAT_ADC_PIN    1     // board pin "A0", reads battery via 2:1 divider
 
-// Voltage divider: BAT+ -[100k]- ADC -[100k]- GND
-static const float BAT_DIVIDER  = 2.0f;
+// Voltage divider: BAT+ -[R1]- ADC -[R2]- GND
+// 理想情况 R1=R2 时 BAT_DIVIDER = 2.0, 但 ±5% 精度下实际 1.9-2.1
+// 该值现在可在设置菜单"电池校准"中微调 (1.80-2.30, 步 0.02)
+float g_batDivider = 2.10f;            // 默认 2.10 (大部分场合够用)
 static const float BAT_FULL_V   = 4.20f;
 static const float BAT_EMPTY_V  = 3.30f;
 
@@ -159,7 +161,7 @@ bool     g_screenOff       = false;
 // Settings menu state
 bool     g_inSettings        = false;
 uint8_t  g_settingsItem      = 0;
-static const uint8_t SETTINGS_COUNT = 11;
+static const uint8_t SETTINGS_COUNT = 12;
 
 // Lifetime stats (separate from per-dive log, also in NVS)
 uint32_t g_lifetimeUnderwaterSec = 0;
@@ -370,6 +372,7 @@ void saveSettingsToNVS() {
   prefs.putUChar("sac",      g_sacLmin);
   prefs.putUChar("cons",     g_conservatism);
   prefs.putUChar("lowT",     g_lowTempC);
+  prefs.putFloat("batDiv",   g_batDivider);
   prefs.end();
   Serial.println("[SET] Settings saved");
 }
@@ -387,6 +390,7 @@ void loadSettingsFromNVS() {
   g_sacLmin        = prefs.getUChar("sac",      18);
   g_conservatism   = prefs.getUChar("cons",     100);
   g_lowTempC       = prefs.getUChar("lowT",     15);
+  g_batDivider     = prefs.getFloat("batDiv",   2.10f);
   prefs.end();
 }
 
@@ -527,23 +531,29 @@ bool trySyncNTP() {
 
 // ================== Battery ==========================================
 float readBatteryVoltage() {
-  uint32_t sum = 0;
+  // 使用 ESP32-S3 内置 ADC 校准 (eFuse 出厂校准曲线), 比 analogRead() 准很多
+  uint32_t sum_mv = 0;
   const int N = 16;
-  for (int i = 0; i < N; i++) sum += analogRead(BAT_ADC_PIN);
-  float v_adc = (sum / (float)N) * (3.3f / 4095.0f);
-  return v_adc * BAT_DIVIDER;
+  for (int i = 0; i < N; i++) sum_mv += analogReadMilliVolts(BAT_ADC_PIN);
+  float v_mv = sum_mv / (float)N;
+  return (v_mv / 1000.0f) * g_batDivider;
 }
 
 uint8_t voltageToPct(float v) {
-  if (v >= BAT_FULL_V) return 100;
+  // 满电容忍: 充满后电池静置电压通常在 4.15-4.20V 之间, 视为 100%
+  // (避免显示 98% 不到的心理落差; 实际 SoC 在 95-100% 范围)
+  if (v >= 4.15f)   return 100;
   if (v <= BAT_EMPTY_V) return 0;
-  // Piecewise linear curve approximating Li-ion discharge
+  // 精修过的锂电池 OCV → SoC 曲线 (开路电压, 无负载)
+  // 数据源: 典型 18650 / Li-Po SoC vs OCV 表 (Battery University)
   static const float pts[][2] = {
-    {4.20f, 100}, {4.10f, 87}, {4.00f, 75}, {3.90f, 60},
-    {3.80f, 45}, {3.70f, 30}, {3.60f, 17}, {3.50f, 8},
-    {3.40f, 3},  {3.30f, 0}
+    {4.15f, 100}, {4.10f, 95}, {4.05f, 88}, {4.00f, 80},
+    {3.95f, 72},  {3.90f, 65}, {3.85f, 55}, {3.80f, 45},
+    {3.75f, 35},  {3.70f, 25}, {3.65f, 15}, {3.55f, 8},
+    {3.45f, 3},   {3.30f, 0}
   };
-  for (int i = 0; i < 9; i++) {
+  const int N = sizeof(pts) / sizeof(pts[0]);
+  for (int i = 0; i < N - 1; i++) {
     if (v <= pts[i][0] && v >= pts[i+1][0]) {
       float t = (v - pts[i+1][0]) / (pts[i][0] - pts[i+1][0]);
       return (uint8_t)(pts[i+1][1] + t * (pts[i][1] - pts[i+1][1]));
@@ -560,6 +570,12 @@ void updateBattery(uint32_t now) {
   // would otherwise be mis-read as a battery.
   g_batPresent = (g_batVoltage >= 3.0f && g_batVoltage <= 4.5f);
   g_batPct     = g_batPresent ? voltageToPct(g_batVoltage) : 0;
+  // 诊断: 输出 ADC 实测毫伏 (校准后, 分压后还原前)
+  uint32_t mv_sum = 0;
+  for (int i = 0; i < 8; i++) mv_sum += analogReadMilliVolts(BAT_ADC_PIN);
+  float mv_avg = mv_sum / 8.0f;
+  Serial.printf("[BAT] ADC=%.0fmV (分压后) -> 实际电池=%.3fV -> %d%%\n",
+                mv_avg, g_batVoltage, g_batPct);
 }
 
 // Draws a small battery icon at (x, y), 18 wide x 7 tall (incl. tip)
@@ -1091,6 +1107,7 @@ const char* settingsItemName(uint8_t i) {
     case 8: return "SAC速率";
     case 9: return "保守度";
     case 10: return "低温报警";
+    case 11: return "电池校准";
   }
   return "?";
 }
@@ -1108,6 +1125,7 @@ void settingsItemValue(uint8_t i, char *buf, size_t sz) {
     case 8: snprintf(buf, sz, "%u L/分", g_sacLmin); break;
     case 9: snprintf(buf, sz, "%u%%", g_conservatism); break;
     case 10: snprintf(buf, sz, "%u 度", g_lowTempC); break;
+    case 11: snprintf(buf, sz, "%.2f", g_batDivider); break;
   }
 }
 
@@ -1159,6 +1177,15 @@ void settingsItemAdjust(uint8_t i, int delta) {
       int v = (int)g_lowTempC + delta * 5;
       if (v < 5) v = 5; if (v > 25) v = 25;
       g_lowTempC = (uint8_t)v;
+      break;
+    }
+    case 11: {  // 电池分压系数 1.80-2.30 步 0.02
+      g_batDivider += delta * 0.02f;
+      if (g_batDivider < 1.80f) g_batDivider = 1.80f;
+      if (g_batDivider > 2.30f) g_batDivider = 2.30f;
+      // 立刻重新读一次, 让用户能看到变化
+      g_batVoltage = readBatteryVoltage();
+      g_batPct = (g_batVoltage >= 3.0f && g_batVoltage <= 4.5f) ? voltageToPct(g_batVoltage) : 0;
       break;
     }
   }
