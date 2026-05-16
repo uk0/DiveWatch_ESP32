@@ -715,9 +715,9 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
   int w = u8g2.getUTF8Width(buf);
   u8g2.drawUTF8(128 - w, 60, buf);
 
-  // 警告标志 (右上角小标识)
-  if (depth > g_alarmDepth)      u8g2.drawUTF8(123, 22, "!");
-  if (ascentMpm > g_ascentLimit) u8g2.drawUTF8(123, 34, "^");
+  // 警告标志 (右边缘小标识, 避免微超出)
+  if (depth > g_alarmDepth)      u8g2.drawUTF8(120, 22, "!");
+  if (ascentMpm > g_ascentLimit) u8g2.drawUTF8(120, 34, "^");
 
   u8g2.sendBuffer();
 }
@@ -1240,7 +1240,8 @@ void drawTimeEdit() {
   u8g2.setFont(FONT_CN);
   // y=10 标题 + MODE 提示
   u8g2.drawUTF8(0, 10, "设置时间");
-  u8g2.drawUTF8(82, 10, "MODE确定");
+  // 右对齐: MODE确定 = 4*6 + 2*12 = 48px, x=80 -> 80-128 刚好不溢出
+  u8g2.drawUTF8(80, 10, "MODE确定");
 
   // 大字时间 y=40 (logisoso24, 字符 16-40)
   char buf[8];
@@ -1273,7 +1274,7 @@ void drawSplash() {
   u8g2.drawUTF8(0, 14, "潜水表 DiveWatch");
   // y=28/40/52 副标题 + 水面 + 密度
   char buf[40];
-  u8g2.drawUTF8(0, 28, "v2.3  ZHL-16C  中文");
+  u8g2.drawUTF8(0, 28, "v3.2  ZHL-16C");
   snprintf(buf, sizeof(buf), "水面: %.1f mbar", g_surfacePressure);
   u8g2.drawUTF8(0, 42, buf);
   snprintf(buf, sizeof(buf), "密度: %.0f kg/m3", g_fluidDensity);
