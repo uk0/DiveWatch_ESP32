@@ -63,6 +63,7 @@ struct DiveRecord {
   uint32_t endEpoch;      // Unix time when dive ended (0 = unknown)
   float    batVoltage;    // 潜水结束时的电池电压 (0 = 未记录)
   float    airUsedL;      // 本次潜水消耗气量 (估算)
+  float    avgDepth;      // 本次潜水平均深度 m (0 = 未记录)
 };
 
 // ================== Pin map ==========================================
@@ -95,12 +96,22 @@ uint32_t g_screenOffMs     = 5UL*60*1000;  // 屏保超时 ms
 uint16_t g_safetyStopSec   = 180;       // 安全停留时长 s
 bool     g_buzzerEnable    = true;      // 蜂鸣器开关
 float    g_fluidDensity    = 1029.0f;   // 水密度 (1029 海, 997 淡)
-// OW 水肺潜水标准: AL80 铝瓶 = 11.1L * 210bar ≈ 2330L
-uint16_t g_initialAirL     = 2330;      // 初始气量 L (AL80 PADI OW 标准)
+// OW 水肺潜水标准: AL80 铝瓶 = 11.1L * 210bar
+// 改用气压表 (SPG) 标准方式: 输入 初始压力(bar) + 瓶容量(L), 内部算总气量
+uint16_t g_initialBar      = 210;       // 初始压力 bar (AL80=210, 12L钢瓶=200/232)
+uint8_t  g_tankVolL        = 11;        // 瓶容量 L (AL80=11, 12L钢瓶=12, 15L=15)
 uint8_t  g_sacLmin         = 18;        // 水面气体消耗速率 L/min (新手休闲)
+uint8_t  g_conservatism    = 100;       // ZHL-16C 保守度因子 % (80-120)
+uint8_t  g_lowTempC        = 15;        // 低温报警阈值 ℃
+
+// 派生量: 总气量 (L) = 初始压力 * 瓶容量
+inline uint16_t totalAirL()  { return (uint16_t)g_initialBar * (uint16_t)g_tankVolL; }
+inline float    barFromAirL(float airL) {
+  return (g_tankVolL > 0) ? (airL / (float)g_tankVolL) : 0.0f;
+}
 
 // 气量监控运行时状态 (不持久化)
-float    g_remainingAirL   = 0.0f;      // 当前剩余气量 L
+float    g_remainingAirL   = 0.0f;      // 当前剩余气量 L (内部用 L 算, 显示转 bar)
 float    g_currentSacL     = 0.0f;      // 当前深度下的实际消耗速率 L/min
 uint32_t g_lastAirCalcMs   = 0;
 
@@ -134,6 +145,13 @@ uint8_t  g_editHH          = 12;
 uint8_t  g_editMM          = 0;
 uint32_t g_lastTimeSaveMs  = 0;
 
+// 平均深度统计 (本次潜水)
+double   g_diveDepthSum  = 0.0;     // 累积 (depth * dt_ms)
+uint32_t g_diveTimeMs    = 0;       // 累积时间 ms
+
+// NDL 计划器
+uint8_t  g_planDepthM    = 18;      // 用户在 PAGE_PLAN 设的计划深度
+
 // Power saving: dim OLED after idle period (g_screenOffMs is configurable)
 uint32_t g_lastInteractMs  = 0;
 bool     g_screenOff       = false;
@@ -141,7 +159,7 @@ bool     g_screenOff       = false;
 // Settings menu state
 bool     g_inSettings        = false;
 uint8_t  g_settingsItem      = 0;
-static const uint8_t SETTINGS_COUNT = 8;
+static const uint8_t SETTINGS_COUNT = 11;
 
 // Lifetime stats (separate from per-dive log, also in NVS)
 uint32_t g_lifetimeUnderwaterSec = 0;
@@ -216,14 +234,21 @@ void updateCompartments(float dt_sec, float depth_m) {
 
 // NDL in minutes: time at current depth until any compartment reaches its M-value.
 // Returns 99.0 (cap) if no compartment is loading or already saturated.
+// 应用保守度因子: M-value 乘以 (g_conservatism / 100.0).
+//   100% = 标准 ZHL-16C
+//   80%  = 更激进 (NDL 增加)
+//   120% = 更保守 (NDL 减少, 推荐 DIY)
 float computeNDL(float depth_m) {
   float pAmb_bar = (g_surfacePressure / 1000.0f) + depth_m * g_fluidDensity * 9.80665f / 1e5f;
   float pAlv     = 0.79f * pAmb_bar;
+  float consFactor = (float)g_conservatism / 100.0f;
+  // 反向: 保守度大于 100 → M-value 阈值要小 → 提早达到 → NDL 短
+  // M_effective = M / consFactor   (consFactor 大于 1 → M 小)
   float ndl_min  = 99.0f;
   for (int i = 0; i < 16; i++) {
-    float Mv = pAmb_bar / B_N2[i] + A_N2[i];   // max allowed N2 tension
+    float Mv = (pAmb_bar / B_N2[i] + A_N2[i]) / consFactor;
     if (g_pN2[i] >= Mv) return 0.0f;
-    if (pAlv <= g_pN2[i]) continue;            // not loading
+    if (pAlv <= g_pN2[i]) continue;
     float ratio = 1.0f - (Mv - g_pN2[i]) / (pAlv - g_pN2[i]);
     if (ratio <= 0.0f) continue;
     float k = 0.6931472f / (HALF_TIMES_N2[i] * 60.0f);
@@ -232,6 +257,13 @@ float computeNDL(float depth_m) {
     if (t_min < ndl_min) ndl_min = t_min;
   }
   return ndl_min;
+}
+
+// 估算海拔 (m), 基于水面气压 (mbar)
+// 国际标准大气模型: alt = 44330 * (1 - (P/P0)^(1/5.255))
+float estimateAltitudeM() {
+  float ratio = g_surfacePressure / 1013.25f;
+  return 44330.0f * (1.0f - powf(ratio, 1.0f / 5.255f));
 }
 
 // Highest tissue load percent vs M-value at current depth (0..100+)
@@ -313,7 +345,7 @@ void btnPoll(Button &b, uint32_t now) {
 }
 
 // ================== UI pages =========================================
-enum Page : uint8_t { PAGE_HUD = 0, PAGE_TISSUE, PAGE_AIR, PAGE_TEMP, PAGE_BAT, PAGE_LASTDIVE, PAGE_LOG, PAGE_STATS, PAGE_COUNT };
+enum Page : uint8_t { PAGE_HUD = 0, PAGE_TISSUE, PAGE_PLAN, PAGE_AIR, PAGE_TEMP, PAGE_BAT, PAGE_LASTDIVE, PAGE_LOG, PAGE_STATS, PAGE_COUNT };
 uint8_t g_page = PAGE_HUD;
 uint8_t g_logViewIdx = 0;
 
@@ -333,8 +365,11 @@ void saveSettingsToNVS() {
   prefs.putUShort("ssSec",   g_safetyStopSec);
   prefs.putBool("buzzer",    g_buzzerEnable);
   prefs.putFloat("density",  g_fluidDensity);
-  prefs.putUShort("airL",    g_initialAirL);
+  prefs.putUShort("barP",    g_initialBar);
+  prefs.putUChar("vol",      g_tankVolL);
   prefs.putUChar("sac",      g_sacLmin);
+  prefs.putUChar("cons",     g_conservatism);
+  prefs.putUChar("lowT",     g_lowTempC);
   prefs.end();
   Serial.println("[SET] Settings saved");
 }
@@ -347,8 +382,11 @@ void loadSettingsFromNVS() {
   g_safetyStopSec  = prefs.getUShort("ssSec",   180);
   g_buzzerEnable   = prefs.getBool("buzzer",    true);
   g_fluidDensity   = prefs.getFloat("density",  1029.0f);
-  g_initialAirL    = prefs.getUShort("airL",    2400);
-  g_sacLmin        = prefs.getUChar("sac",      20);
+  g_initialBar     = prefs.getUShort("barP",    210);
+  g_tankVolL       = prefs.getUChar("vol",      11);
+  g_sacLmin        = prefs.getUChar("sac",      18);
+  g_conservatism   = prefs.getUChar("cons",     100);
+  g_lowTempC       = prefs.getUChar("lowT",     15);
   prefs.end();
 }
 
@@ -715,7 +753,11 @@ void drawLastDive() {
     // y=22/34/46/58 (4 行, 12 间距, 不重叠)
     snprintf(buf, sizeof(buf), "最深  %.1f 米", r.maxDepth);
     u8g2.drawUTF8(0, 22, buf);
-    snprintf(buf, sizeof(buf), "时长  %u:%02u",  r.durationSec/60, r.durationSec%60);
+    if (r.avgDepth > 0.1f) {
+      snprintf(buf, sizeof(buf), "时长 %u:%02u 均%.1fm", r.durationSec/60, r.durationSec%60, r.avgDepth);
+    } else {
+      snprintf(buf, sizeof(buf), "时长  %u:%02u", r.durationSec/60, r.durationSec%60);
+    }
     u8g2.drawUTF8(0, 34, buf);
     snprintf(buf, sizeof(buf), "温度  %.1f 度",  r.minTemp);
     u8g2.drawUTF8(0, 46, buf);
@@ -781,10 +823,12 @@ void drawAir() {
   u8g2.setFont(FONT_CN);
 
   char buf[40];
-  // y=10 标题 + 当前消耗速率
+  uint16_t total_L = totalAirL();   // 当前满瓶总气量 L
+  // y=10 标题 + 当前消耗速率 (bar/min)
   u8g2.drawUTF8(0, 10, "气量监控");
   if (g_diving && g_currentSacL > 0.1f) {
-    snprintf(buf, sizeof(buf), "%.0fL/分", g_currentSacL);
+    float currentBarMin = (g_tankVolL > 0) ? (g_currentSacL / g_tankVolL) : 0;
+    snprintf(buf, sizeof(buf), "%.1fbar/分", currentBarMin);
     int w = u8g2.getUTF8Width(buf);
     u8g2.drawUTF8(128 - w, 10, buf);
   } else {
@@ -792,9 +836,10 @@ void drawAir() {
     u8g2.drawUTF8(128 - w, 10, "水面");
   }
 
-  // y=22 剩余气量 + 百分比
-  uint8_t pct = (g_initialAirL > 0) ? (uint8_t)((g_remainingAirL / g_initialAirL) * 100.0f) : 0;
-  snprintf(buf, sizeof(buf), "剩余 %4dL  %3d%%", (int)g_remainingAirL, pct);
+  // y=22 剩余压力 + 百分比 (主要数据)
+  float remainingBar = barFromAirL(g_remainingAirL);
+  uint8_t pct = (total_L > 0) ? (uint8_t)((g_remainingAirL / total_L) * 100.0f) : 0;
+  snprintf(buf, sizeof(buf), "剩压 %3d bar  %3d%%", (int)remainingBar, pct);
   u8g2.drawUTF8(0, 22, buf);
 
   // y=34 可潜时间 (Air Time)
@@ -807,21 +852,59 @@ void drawAir() {
   }
   u8g2.drawUTF8(0, 34, buf);
 
-  // y=46 SAC + 瓶容量
-  snprintf(buf, sizeof(buf), "SAC %dL/分  瓶%dL", g_sacLmin, g_initialAirL);
+  // y=46 瓶配置
+  snprintf(buf, sizeof(buf), "瓶 %dbar*%dL  SAC%d", g_initialBar, g_tankVolL, g_sacLmin);
   u8g2.drawUTF8(0, 46, buf);
 
-  // y=52-60 进度条
+  // y=52-60 压力条 (按总压力 0-g_initialBar)
   int barY = 54;
   int barH = 8;
   u8g2.drawFrame(0, barY, 128, barH);
-  int fillW = (g_initialAirL > 0)
-      ? (int)((126.0f) * (g_remainingAirL / g_initialAirL))
+  int fillW = (g_initialBar > 0)
+      ? (int)((126.0f) * (remainingBar / g_initialBar))
       : 0;
   if (fillW < 0) fillW = 0;
   if (fillW > 126) fillW = 126;
   if (fillW > 0) u8g2.drawBox(1, barY + 1, fillW, barH - 2);
 
+  u8g2.sendBuffer();
+}
+
+void drawPlan() {
+  u8g2.clearBuffer();
+  u8g2.setFont(FONT_CN);
+  // y=10 标题 + 当前深度
+  u8g2.drawUTF8(0, 10, "潜水规划");
+  char buf[40];
+  snprintf(buf, sizeof(buf), "当前 %.1fm", g_depthSmooth);
+  int w = u8g2.getUTF8Width(buf);
+  u8g2.drawUTF8(128 - w, 10, buf);
+
+  // y=22 计划深度
+  snprintf(buf, sizeof(buf), "计划深度 %u 米", g_planDepthM);
+  u8g2.drawUTF8(0, 22, buf);
+
+  // y=34 该深度的 NDL
+  float ndl = computeNDL((float)g_planDepthM);
+  if (ndl >= 99.0f)      snprintf(buf, sizeof(buf), "NDL %d 米 >99 分", g_planDepthM);
+  else if (ndl <= 0.0f)  snprintf(buf, sizeof(buf), "NDL %d 米 需减压!", g_planDepthM);
+  else                   snprintf(buf, sizeof(buf), "NDL %d 米 %.0f 分", g_planDepthM, ndl);
+  u8g2.drawUTF8(0, 34, buf);
+
+  // y=46 该深度的 Air Time (满瓶估算)
+  uint16_t total_L = totalAirL();
+  float sacAtDepth = g_sacLmin * (1.0f + g_planDepthM / 10.0f);
+  if (sacAtDepth > 0) {
+    int airMin = (int)(total_L / sacAtDepth);
+    if (airMin > 999) airMin = 999;
+    snprintf(buf, sizeof(buf), "满瓶气量 %d 分钟", airMin);
+  } else {
+    snprintf(buf, sizeof(buf), "满瓶气量 --");
+  }
+  u8g2.drawUTF8(0, 46, buf);
+
+  // y=58 操作提示
+  u8g2.drawUTF8(0, 58, "上下键改深度");
   u8g2.sendBuffer();
 }
 
@@ -959,8 +1042,11 @@ void drawStats() {
   u8g2.drawUTF8(0, 10, "总览统计");
 
   char buf[40];
-  if (g_batPresent) snprintf(buf, sizeof(buf), "%.2fV %u%%", g_batVoltage, g_batPct);
-  else              snprintf(buf, sizeof(buf), "未接电池");
+  // 标题右: 海拔 (海平面附近不显示)
+  float alt = estimateAltitudeM();
+  if (alt > 50.0f) snprintf(buf, sizeof(buf), "海拔%.0fm", alt);
+  else if (g_batPresent) snprintf(buf, sizeof(buf), "%.2fV %u%%", g_batVoltage, g_batPct);
+  else snprintf(buf, sizeof(buf), "未接电池");
   int w = u8g2.getUTF8Width(buf);
   u8g2.drawUTF8(128 - w, 10, buf);
 
@@ -1000,8 +1086,11 @@ const char* settingsItemName(uint8_t i) {
     case 3: return "安全停留";
     case 4: return "蜂鸣器";
     case 5: return "水密度";
-    case 6: return "初始气量";
-    case 7: return "SAC速率";
+    case 6: return "初始气压";
+    case 7: return "瓶容量";
+    case 8: return "SAC速率";
+    case 9: return "保守度";
+    case 10: return "低温报警";
   }
   return "?";
 }
@@ -1014,8 +1103,11 @@ void settingsItemValue(uint8_t i, char *buf, size_t sz) {
     case 3: snprintf(buf, sz, "%u秒", g_safetyStopSec); break;
     case 4: snprintf(buf, sz, "%s", g_buzzerEnable ? "开" : "关"); break;
     case 5: snprintf(buf, sz, "%s", g_fluidDensity > 1010 ? "海水" : "淡水"); break;
-    case 6: snprintf(buf, sz, "%uL", g_initialAirL); break;
-    case 7: snprintf(buf, sz, "%uL/分", g_sacLmin); break;
+    case 6: snprintf(buf, sz, "%u bar", g_initialBar); break;
+    case 7: snprintf(buf, sz, "%u L", g_tankVolL); break;
+    case 8: snprintf(buf, sz, "%u L/分", g_sacLmin); break;
+    case 9: snprintf(buf, sz, "%u%%", g_conservatism); break;
+    case 10: snprintf(buf, sz, "%u 度", g_lowTempC); break;
   }
 }
 
@@ -1039,16 +1131,34 @@ void settingsItemAdjust(uint8_t i, int delta) {
     case 5: g_fluidDensity = (g_fluidDensity > 1010) ? 997.0f : 1029.0f;
             if (g_sensorOk) sensor.setFluidDensity(g_fluidDensity);
             break;
-    case 6: {  // 初始气量 1000-3600 L 步 200
-      int v = (int)g_initialAirL + delta * 200;
-      if (v < 1000) v = 1000; if (v > 3600) v = 3600;
-      g_initialAirL = (uint16_t)v;
+    case 6: {  // 初始气压 100-300 bar 步 10
+      int v = (int)g_initialBar + delta * 10;
+      if (v < 100) v = 100; if (v > 300) v = 300;
+      g_initialBar = (uint16_t)v;
       break;
     }
-    case 7: {  // SAC 8-30 L/min 步 1
+    case 7: {  // 瓶容量 5-20 L 步 1
+      int v = (int)g_tankVolL + delta;
+      if (v < 5) v = 5; if (v > 20) v = 20;
+      g_tankVolL = (uint8_t)v;
+      break;
+    }
+    case 8: {  // SAC 8-30 L/min 步 1
       int v = (int)g_sacLmin + delta;
       if (v < 8) v = 8; if (v > 30) v = 30;
       g_sacLmin = (uint8_t)v;
+      break;
+    }
+    case 9: {  // 保守度 80-120% 步 10
+      int v = (int)g_conservatism + delta * 10;
+      if (v < 80) v = 80; if (v > 120) v = 120;
+      g_conservatism = (uint8_t)v;
+      break;
+    }
+    case 10: {  // 低温 5-25 度 步 5
+      int v = (int)g_lowTempC + delta * 5;
+      if (v < 5) v = 5; if (v > 25) v = 25;
+      g_lowTempC = (uint8_t)v;
       break;
     }
   }
@@ -1145,6 +1255,49 @@ void drawError(const char *l1, const char *l2 = nullptr) {
   u8g2.sendBuffer();
 }
 
+// 开机自检: I2C 设备 + 按钮 + 蜂鸣器
+void runSelfTest() {
+  u8g2.clearBuffer();
+  u8g2.setFont(FONT_CN);
+  u8g2.drawUTF8(0, 12, "系统自检");
+  u8g2.drawUTF8(0, 28, "正在检测...");
+  u8g2.sendBuffer();
+
+  // 检查 OLED I2C (能跑到这一步说明 OLED OK)
+  bool oledOK = true;
+
+  // 检查 MS5837 0x76
+  Wire.beginTransmission(0x76);
+  bool ms5837OK = (Wire.endTransmission() == 0);
+
+  // 蜂鸣器响 1 声测试
+  digitalWrite(BUZZER_PIN, HIGH);
+  delay(60);
+  digitalWrite(BUZZER_PIN, LOW);
+  bool buzzerTested = true;
+
+  // 按钮检查 (未按状态应为 HIGH)
+  bool btnOK = (digitalRead(BTN_MODE_PIN) == HIGH) &&
+               (digitalRead(BTN_UP_PIN)   == HIGH) &&
+               (digitalRead(BTN_DOWN_PIN) == HIGH);
+
+  // 显示自检结果
+  u8g2.clearBuffer();
+  u8g2.drawUTF8(0, 12, "系统自检结果");
+  char buf[32];
+  snprintf(buf, sizeof(buf), "OLED       %s", oledOK ? "正常" : "异常");
+  u8g2.drawUTF8(0, 26, buf);
+  snprintf(buf, sizeof(buf), "MS5837     %s", ms5837OK ? "正常" : "异常");
+  u8g2.drawUTF8(0, 38, buf);
+  snprintf(buf, sizeof(buf), "按键       %s", btnOK ? "正常" : "异常");
+  u8g2.drawUTF8(0, 50, buf);
+  snprintf(buf, sizeof(buf), "蜂鸣器     %s", buzzerTested ? "已测试" : "异常");
+  u8g2.drawUTF8(0, 62, buf);
+  u8g2.sendBuffer();
+  Serial.printf("[SELF-TEST] OLED=%d MS5837=%d BTN=%d\n", oledOK, ms5837OK, btnOK);
+  delay(1500);
+}
+
 // ================== Setup ============================================
 void setup() {
   Serial.begin(115200);
@@ -1161,6 +1314,8 @@ void setup() {
 
   u8g2.begin();
   drawSplash();
+  delay(400);
+  runSelfTest();
 
   uint8_t tries = 0;
   while (!sensor.init()) {
@@ -1315,6 +1470,9 @@ void loop() {
       g_btnUp.evShort = false;
       if (g_page == PAGE_LOG) {
         if (g_logCount > 0 && g_logViewIdx > 0) g_logViewIdx--;
+      } else if (g_page == PAGE_PLAN) {
+        // 计划深度 + 1 (限 1-50m)
+        if (g_planDepthM < 50) g_planDepthM++;
       } else {
         g_maxDepth = 0;
         Serial.println("[ACTION] Max depth reset");
@@ -1333,6 +1491,9 @@ void loop() {
       g_btnDown.evShort = false;
       if (g_page == PAGE_LOG) {
         if (g_logCount > 0 && g_logViewIdx < g_logCount - 1) g_logViewIdx++;
+      } else if (g_page == PAGE_PLAN) {
+        // 计划深度 - 1 (限 1-50m)
+        if (g_planDepthM > 1) g_planDepthM--;
       } else if (g_diving) {
         g_diveStartMs = now;
         Serial.println("[ACTION] Dive timer reset");
@@ -1393,6 +1554,12 @@ void loop() {
       if (g_remainingAirL < 0) g_remainingAirL = 0;
     }
 
+    // 平均深度累计 (潜水时)
+    if (g_diving) {
+      g_diveDepthSum += (double)g_depthSmooth * (double)dtMs;
+      g_diveTimeMs   += dtMs;
+    }
+
     // Dive state machine
     if (!g_diving && g_depthSmooth > DIVE_START_DEPTH) {
       g_diving = true;
@@ -1402,8 +1569,10 @@ void loop() {
       g_ss = SS_IDLE;
       g_ssAccumMs = 0;
       g_ssArmCondition = false;
-      g_remainingAirL = g_initialAirL;   // 重置初始气量
+      g_remainingAirL = (float)totalAirL();   // 满瓶气量
       g_currentSacL = 0;
+      g_diveDepthSum = 0;       // 平均深度累计重置
+      g_diveTimeMs = 0;
       Serial.println("[DIVE] Started");
     } else if (g_diving && g_depthSmooth < SURFACE_DEPTH) {
       // End dive: persist
@@ -1411,6 +1580,8 @@ void loop() {
       if (durSec >= 30) {  // Ignore tiny accidental triggers
         time_t nowEpoch;
         time(&nowEpoch);
+        uint16_t total_L = totalAirL();
+        float avgDep = (g_diveTimeMs > 0) ? (float)(g_diveDepthSum / (double)g_diveTimeMs) : 0.0f;
         DiveRecord rec = {
           g_maxDepth,
           (uint16_t)min((uint32_t)0xFFFF, durSec),
@@ -1419,7 +1590,8 @@ void loop() {
           0,
           (uint32_t)nowEpoch,
           g_batPresent ? g_batVoltage : 0.0f,
-          (g_initialAirL > g_remainingAirL) ? (g_initialAirL - g_remainingAirL) : 0.0f
+          (total_L > g_remainingAirL) ? (total_L - g_remainingAirL) : 0.0f,
+          avgDep
         };
         saveDiveToNVS(rec);
         Serial.printf("[DIVE] Saved: max=%.1fm dur=%us minT=%.1fC end=%lu bat=%.2fV air=%.0fL\n",
@@ -1448,6 +1620,7 @@ void loop() {
     switch (g_page) {
       case PAGE_HUD:      drawHud(g_depthSmooth, g_maxDepth, g_temp, ndl, g_ascentMpm, diveSec); break;
       case PAGE_TISSUE:   drawTissue(g_depthSmooth); break;
+      case PAGE_PLAN:     drawPlan(); break;
       case PAGE_AIR:      drawAir(); break;
       case PAGE_TEMP:     drawTempChart(); break;
       case PAGE_BAT:      drawBatHist(); break;
@@ -1473,9 +1646,12 @@ void loop() {
       beepBlocking(2, 100); g_lastBeepMs = now;
     } else if (ndl <= 0.0f && g_diving) {
       beepBlocking(4, 80); g_lastBeepMs = now;
-    } else if (g_diving && g_remainingAirL > 0 && g_remainingAirL < g_initialAirL * 0.15f) {
-      // 剩余气量 < 15% 报警
+    } else if (g_diving && g_remainingAirL > 0 && barFromAirL(g_remainingAirL) < 50.0f) {
+      // 剩余压力 < 50 bar (相当于 1/5 - 1/4 满瓶) 报警
       beepBlocking(5, 60); g_lastBeepMs = now;
+    } else if (g_diving && g_temp < (float)g_lowTempC) {
+      // 低温报警 (短)
+      beepBlocking(2, 50); g_lastBeepMs = now;
     }
   }
 
