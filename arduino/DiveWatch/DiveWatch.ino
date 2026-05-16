@@ -97,6 +97,7 @@ static const uint32_t CPU_FREQ_IDLE       = 80;      // MHz, 屏保时降频省�
 // ================== 可调参数 (设置菜单可改, 持久化) ==================
 float    g_alarmDepth      = 30.0f;     // 深度报警 m
 float    g_ascentLimit     = 9.0f;      // 上升速率警告 m/min
+float    g_descentLimit    = 18.0f;     // 下降速率警告 m/min (PADI 标准 18)
 uint32_t g_screenOffMs     = 5UL*60*1000;  // 屏保超时 ms
 uint16_t g_safetyStopSec   = 180;       // 安全停留时长 s
 bool     g_buzzerEnable    = true;      // 蜂鸣器开关
@@ -164,7 +165,7 @@ bool     g_screenOff       = false;
 // Settings menu state
 bool     g_inSettings        = false;
 uint8_t  g_settingsItem      = 0;
-static const uint8_t SETTINGS_COUNT = 12;
+static const uint8_t SETTINGS_COUNT = 13;
 
 // Lifetime stats (separate from per-dive log, also in NVS)
 uint32_t g_lifetimeUnderwaterSec = 0;
@@ -413,6 +414,7 @@ void saveSettingsToNVS() {
   prefs.begin("dive", false);
   prefs.putFloat("alarmD",   g_alarmDepth);
   prefs.putFloat("ascentL",  g_ascentLimit);
+  prefs.putFloat("descentL", g_descentLimit);
   prefs.putULong("scrOffMs", g_screenOffMs);
   prefs.putUShort("ssSec",   g_safetyStopSec);
   prefs.putBool("buzzer",    g_buzzerEnable);
@@ -431,6 +433,7 @@ void loadSettingsFromNVS() {
   prefs.begin("dive", true);
   g_alarmDepth     = prefs.getFloat("alarmD",   30.0f);
   g_ascentLimit    = prefs.getFloat("ascentL",   9.0f);
+  g_descentLimit   = prefs.getFloat("descentL", 18.0f);
   g_screenOffMs    = prefs.getULong("scrOffMs", 5UL * 60UL * 1000UL);
   g_safetyStopSec  = prefs.getUShort("ssSec",   180);
   g_buzzerEnable   = prefs.getBool("buzzer",    true);
@@ -764,9 +767,16 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
     u8g2.drawUTF8(0, 48, buf);
   }
 
-  // 中部右: 最深 (仅在非关键状态时显示, 避免与左边状态字挤)
+  // 中部右: N2 负荷% (潜水时) 或 最深 (非潜水时)
+  // 关键状态 (安全停留/减压/SS完成) 时不显示右侧, 让左边状态字占整行
   if (!ssActive && g_ss != SS_DONE && !decoNow) {
-    snprintf(buf, sizeof(buf), "最深%.1f", maxDepth);
+    if (g_diving) {
+      // 潜水中: 显示氮气负荷, 更关键
+      float n2Pct = computeTissueLoadPct(depth);
+      snprintf(buf, sizeof(buf), "N2 %.0f%%", n2Pct);
+    } else {
+      snprintf(buf, sizeof(buf), "最深%.1f", maxDepth);
+    }
     int w = u8g2.getUTF8Width(buf);
     u8g2.drawUTF8(126 - w, 48, buf);
   }
@@ -780,8 +790,10 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
   u8g2.drawUTF8(126 - w, 60, buf);
 
   // 警告标志 (右边缘小标识, 避免微超出)
-  if (depth > g_alarmDepth)      u8g2.drawUTF8(120, 22, "!");
-  if (ascentMpm > g_ascentLimit) u8g2.drawUTF8(120, 34, "^");
+  if (depth > g_alarmDepth)            u8g2.drawUTF8(120, 22, "!");
+  if (ascentMpm > g_ascentLimit)       u8g2.drawUTF8(120, 34, "^");  // 上升过快
+  if (-ascentMpm > g_descentLimit && g_diving)
+                                        u8g2.drawUTF8(120, 60, "v");  // 下降过快
 
   u8g2.sendBuffer();
 }
@@ -1243,6 +1255,7 @@ const char* settingsItemName(uint8_t i) {
     case 9: return "保守度";
     case 10: return "低温报警";
     case 11: return "电池校准";
+    case 12: return "下降警告";
   }
   return "?";
 }
@@ -1261,6 +1274,7 @@ void settingsItemValue(uint8_t i, char *buf, size_t sz) {
     case 9: snprintf(buf, sz, "%u%%", g_conservatism); break;
     case 10: snprintf(buf, sz, "%u 度", g_lowTempC); break;
     case 11: snprintf(buf, sz, "%.2f", g_batDivider); break;
+    case 12: snprintf(buf, sz, "%.0f米/分", g_descentLimit); break;
   }
 }
 
@@ -1321,6 +1335,10 @@ void settingsItemAdjust(uint8_t i, int delta) {
       // 立刻重新读一次, 让用户能看到变化
       g_batVoltage = readBatteryVoltage();
       g_batPct = (g_batVoltage >= 3.0f && g_batVoltage <= 4.5f) ? voltageToPct(g_batVoltage) : 0;
+      break;
+    }
+    case 12: {  // 下降警告 10-30 m/min 步 2
+      g_descentLimit = constrain(g_descentLimit + delta * 2.0f, 10.0f, 30.0f);
       break;
     }
   }
@@ -1918,7 +1936,11 @@ void loop() {
     if (g_depthSmooth > g_alarmDepth) {
       beepBlocking(3, 70); g_lastBeepMs = now;
     } else if (g_ascentMpm > g_ascentLimit && g_depthSmooth > 3.0f) {
+      // 上升过快 (1 长鸣)
       beepBlocking(1, 250); g_lastBeepMs = now;
+    } else if (-g_ascentMpm > g_descentLimit && g_depthSmooth > 3.0f && g_diving) {
+      // 下降过快 (2 短鸣 - 与上升的 1 长鸣区分)
+      beepBlocking(2, 80); g_lastBeepMs = now;
     } else if (g_ss == SS_DONE && g_lastBeepMs == 0) {
       beepBlocking(2, 100); g_lastBeepMs = now;
     } else if (ndl <= 0.0f && g_diving) {
