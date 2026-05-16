@@ -558,7 +558,7 @@ float depthFromPressure(float pressureMbar) {
 //   u8g2_font_wqy12_t_chinese1  -> 12px 中文(约1000常用字), 含ASCII
 //   u8g2_font_logisoso28_tn     -> 大字数字(深度)
 //   u8g2_font_logisoso24_tn     -> 中字数字(时间编辑)
-#define FONT_CN     u8g2_font_wqy12_t_chinese3
+#define FONT_CN     u8g2_font_wqy12_t_gb2312
 #define FONT_BIG    u8g2_font_logisoso28_tn
 #define FONT_MID    u8g2_font_logisoso24_tn
 
