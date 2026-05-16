@@ -61,6 +61,8 @@ struct DiveRecord {
   uint8_t  saltwater;     // 1 = sea, 0 = fresh
   uint8_t  _pad;
   uint32_t endEpoch;      // Unix time when dive ended (0 = unknown)
+  float    batVoltage;    // 潜水结束时的电池电压 (0 = 未记录)
+  float    airUsedL;      // 本次潜水消耗气量 (估算)
 };
 
 // ================== Pin map ==========================================
@@ -93,8 +95,9 @@ uint32_t g_screenOffMs     = 5UL*60*1000;  // 屏保超时 ms
 uint16_t g_safetyStopSec   = 180;       // 安全停留时长 s
 bool     g_buzzerEnable    = true;      // 蜂鸣器开关
 float    g_fluidDensity    = 1029.0f;   // 水密度 (1029 海, 997 淡)
-uint16_t g_initialAirL     = 2400;      // 初始气量 L (12L * 200bar = 2400L)
-uint8_t  g_sacLmin         = 20;        // 水面气体消耗速率 L/min
+// OW 水肺潜水标准: AL80 铝瓶 = 11.1L * 210bar ≈ 2330L
+uint16_t g_initialAirL     = 2330;      // 初始气量 L (AL80 PADI OW 标准)
+uint8_t  g_sacLmin         = 18;        // 水面气体消耗速率 L/min (新手休闲)
 
 // 气量监控运行时状态 (不持久化)
 float    g_remainingAirL   = 0.0f;      // 当前剩余气量 L
@@ -149,6 +152,13 @@ float    g_tempHist[TEMP_HIST_LEN] = {0};
 uint8_t  g_tempHistIdx   = 0;
 uint8_t  g_tempHistCount = 0;
 uint32_t g_lastTempSampleMs = 0;
+
+// Battery voltage history (1 sample/hour, ring buffer of 24 = 1 day)
+static const uint8_t BAT_HIST_LEN = 24;
+float    g_batHist[BAT_HIST_LEN] = {0};
+uint8_t  g_batHistIdx   = 0;
+uint8_t  g_batHistCount = 0;
+uint32_t g_lastBatHistMs = 0;
 
 // ================== Moving-average filter ============================
 float    g_pressBuf[AVG_WINDOW] = {0};
@@ -303,7 +313,7 @@ void btnPoll(Button &b, uint32_t now) {
 }
 
 // ================== UI pages =========================================
-enum Page : uint8_t { PAGE_HUD = 0, PAGE_TISSUE, PAGE_AIR, PAGE_TEMP, PAGE_LASTDIVE, PAGE_LOG, PAGE_STATS, PAGE_COUNT };
+enum Page : uint8_t { PAGE_HUD = 0, PAGE_TISSUE, PAGE_AIR, PAGE_TEMP, PAGE_BAT, PAGE_LASTDIVE, PAGE_LOG, PAGE_STATS, PAGE_COUNT };
 uint8_t g_page = PAGE_HUD;
 uint8_t g_logViewIdx = 0;
 
@@ -352,8 +362,9 @@ void loadLogFromNVS() {
   for (uint8_t i = 0; i < g_logCount; i++) {
     char key[8];
     snprintf(key, sizeof(key), "r%u", i);
-    size_t got = prefs.getBytes(key, &g_log[i], sizeof(DiveRecord));
-    if (got != sizeof(DiveRecord)) g_log[i] = {0, 0, 0, 1};
+    // 旧格式记录 size 较小, 用 zero-init + getBytes 兼容
+    g_log[i] = {0, 0, 0, 1, 0, 0, 0.0f, 0.0f};
+    prefs.getBytes(key, &g_log[i], sizeof(DiveRecord));
   }
   prefs.end();
 }
@@ -747,11 +758,20 @@ void drawLogList() {
     // y=22/34/46/58 (4 行, 12 间距)
     snprintf(buf, sizeof(buf), "#%u 最深%.1f米", g_diveTotal - g_logViewIdx, r.maxDepth);
     u8g2.drawUTF8(0, 22, buf);
-    snprintf(buf, sizeof(buf), "时长 %u:%02u", r.durationSec/60, r.durationSec%60);
+    snprintf(buf, sizeof(buf), "时长 %u:%02u  %s", r.durationSec/60, r.durationSec%60, r.saltwater ? "海" : "淡");
     u8g2.drawUTF8(0, 34, buf);
-    snprintf(buf, sizeof(buf), "温度 %.1f度  %s", r.minTemp, r.saltwater ? "海水" : "淡水");
+    if (r.batVoltage > 0.1f) {
+      snprintf(buf, sizeof(buf), "温%.1f度 电%.2fV", r.minTemp, r.batVoltage);
+    } else {
+      snprintf(buf, sizeof(buf), "温度 %.1f 度", r.minTemp);
+    }
     u8g2.drawUTF8(0, 46, buf);
-    u8g2.drawUTF8(0, 58, "上下键浏览");
+    if (r.airUsedL > 1.0f) {
+      snprintf(buf, sizeof(buf), "耗气 %.0fL", r.airUsedL);
+    } else {
+      snprintf(buf, sizeof(buf), "上下键浏览");
+    }
+    u8g2.drawUTF8(0, 58, buf);
   }
   u8g2.sendBuffer();
 }
@@ -865,6 +885,71 @@ void recordTempSample(uint32_t now) {
   g_tempHist[g_tempHistIdx] = g_temp;
   g_tempHistIdx = (g_tempHistIdx + 1) % TEMP_HIST_LEN;
   if (g_tempHistCount < TEMP_HIST_LEN) g_tempHistCount++;
+}
+
+// 每小时采样一次电池电压, 环形缓冲 24 小时
+void recordBatHistSample(uint32_t now) {
+  if (!g_batPresent) return;
+  if (g_lastBatHistMs != 0 && now - g_lastBatHistMs < 3600000UL) return;
+  g_lastBatHistMs = now;
+  g_batHist[g_batHistIdx] = g_batVoltage;
+  g_batHistIdx = (g_batHistIdx + 1) % BAT_HIST_LEN;
+  if (g_batHistCount < BAT_HIST_LEN) g_batHistCount++;
+}
+
+void drawBatHist() {
+  u8g2.clearBuffer();
+  u8g2.setFont(FONT_CN);
+  // y=10 标题 + 当前电压/百分比
+  char buf[40];
+  u8g2.drawUTF8(0, 10, "电池趋势");
+  if (g_batPresent) {
+    snprintf(buf, sizeof(buf), "%.2fV %u%%", g_batVoltage, g_batPct);
+  } else {
+    snprintf(buf, sizeof(buf), "未接入");
+  }
+  int w = u8g2.getUTF8Width(buf);
+  u8g2.drawUTF8(128 - w, 10, buf);
+
+  // 中部说明
+  if (g_batHistCount < 2) {
+    snprintf(buf, sizeof(buf), "已采 %u/24 小时", g_batHistCount);
+    u8g2.drawUTF8(0, 34, buf);
+    u8g2.drawUTF8(0, 46, "每小时采样一次");
+    u8g2.sendBuffer();
+    return;
+  }
+
+  // 找 min/max 电压
+  float minV = 5.0f, maxV = 0.0f;
+  for (int i = 0; i < g_batHistCount; i++) {
+    if (g_batHist[i] < minV) minV = g_batHist[i];
+    if (g_batHist[i] > maxV) maxV = g_batHist[i];
+  }
+  if (maxV - minV < 0.05f) { float c = (maxV + minV) / 2; minV = c - 0.025f; maxV = c + 0.025f; }
+
+  // Y 轴标签
+  snprintf(buf, sizeof(buf), "%.2f", maxV);
+  u8g2.drawUTF8(0, 22, buf);
+  snprintf(buf, sizeof(buf), "%.2f", minV);
+  u8g2.drawUTF8(0, 58, buf);
+
+  // 绘图区 x=28-126 y=16-58
+  int x0 = 28, y0 = 16, gw = 98, gh = 42;
+  u8g2.drawFrame(x0, y0, gw, gh);
+
+  // 折线
+  for (int i = 0; i < g_batHistCount - 1; i++) {
+    int idx1 = (g_batHistIdx + BAT_HIST_LEN - g_batHistCount + i) % BAT_HIST_LEN;
+    int idx2 = (g_batHistIdx + BAT_HIST_LEN - g_batHistCount + i + 1) % BAT_HIST_LEN;
+    int x1 = x0 + 1 + i * (gw - 2) / (g_batHistCount - 1);
+    int x2 = x0 + 1 + (i + 1) * (gw - 2) / (g_batHistCount - 1);
+    int y1 = y0 + gh - 2 - (int)((g_batHist[idx1] - minV) * (gh - 4) / (maxV - minV));
+    int y2 = y0 + gh - 2 - (int)((g_batHist[idx2] - minV) * (gh - 4) / (maxV - minV));
+    u8g2.drawLine(x1, y1, x2, y2);
+  }
+
+  u8g2.sendBuffer();
 }
 
 void drawStats() {
@@ -1297,6 +1382,9 @@ void loop() {
     // Record temperature sample (rate-limited to 1/min internally)
     recordTempSample(now);
 
+    // Record battery sample (rate-limited to 1/hour internally)
+    recordBatHistSample(now);
+
     // Air consumption (only while actively diving)
     if (g_diving) {
       g_currentSacL = g_sacLmin * (1.0f + g_depthSmooth / 10.0f);
@@ -1329,11 +1417,14 @@ void loop() {
           g_diveMinTemp,
           (uint8_t)(g_fluidDensity > 1010 ? 1 : 0),
           0,
-          (uint32_t)nowEpoch
+          (uint32_t)nowEpoch,
+          g_batPresent ? g_batVoltage : 0.0f,
+          (g_initialAirL > g_remainingAirL) ? (g_initialAirL - g_remainingAirL) : 0.0f
         };
         saveDiveToNVS(rec);
-        Serial.printf("[DIVE] Saved: max=%.1fm dur=%us minT=%.1fC end=%lu\n",
-                      rec.maxDepth, rec.durationSec, rec.minTemp, (unsigned long)rec.endEpoch);
+        Serial.printf("[DIVE] Saved: max=%.1fm dur=%us minT=%.1fC end=%lu bat=%.2fV air=%.0fL\n",
+                      rec.maxDepth, rec.durationSec, rec.minTemp,
+                      (unsigned long)rec.endEpoch, rec.batVoltage, rec.airUsedL);
       } else {
         Serial.println("[DIVE] Ended (too short, not saved)");
       }
@@ -1359,6 +1450,7 @@ void loop() {
       case PAGE_TISSUE:   drawTissue(g_depthSmooth); break;
       case PAGE_AIR:      drawAir(); break;
       case PAGE_TEMP:     drawTempChart(); break;
+      case PAGE_BAT:      drawBatHist(); break;
       case PAGE_LASTDIVE: drawLastDive(); break;
       case PAGE_LOG:      drawLogList();  break;
       case PAGE_STATS:    drawStats();    break;
