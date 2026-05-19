@@ -42,6 +42,13 @@ void drawCN(int x, int y, const char *text, const uint8_t *font, uint16_t color)
   u8g2.print(text);
 }
 
+// 中文文本 helper (统一用 wqy 字体 + 橘黄背景)
+void textCN(int x, int y, const char *text, const uint8_t *font, uint16_t color) {
+  u8g2.setFont(font);
+  u8g2.setForegroundColor(color);
+  u8g2.drawUTF8(x, y, text);
+}
+
 void setup() {
   Serial.begin(115200);
   delay(200);
@@ -49,53 +56,60 @@ void setup() {
 
   mySPI.begin(TFT_SCK, -1, TFT_MOSI, TFT_CS);
   tft.init(240, 320);
-  tft.setRotation(1);               // 横屏 320 宽 × 240 高
-  tft.invertDisplay(true);          // 关键! 这块屏需要反色
-  tft.fillScreen(C(RGB_ORANGE));    // 橘黄背景 (swap)
+  tft.setSPISpeed(10000000);
+  tft.setRotation(1);
+  tft.invertDisplay(true);
+  tft.fillScreen(C(RGB_ORANGE));
 
   u8g2.begin(tft);
-  u8g2.setFontMode(1);              // 透明背景
+  u8g2.setFontMode(0);
   u8g2.setFontDirection(0);
+  u8g2.setBackgroundColor(C(RGB_ORANGE));     // 关键: 文字背景=屏底色
 
-  // ===== 顶部状态栏 (y=0-30, 暗灰底白字) =====
-  tft.fillRect(0, 0, 320, 30, C(RGB_DARK));
-  drawCN(10,  22, "12:34",       u8g2_font_wqy16_t_gb2312, C(RGB_WHITE));
-  drawCN(120, 22, "潜水中 5:23", u8g2_font_wqy16_t_gb2312, C(RGB_GREEN));
-  drawCN(250, 22, "87% 海",      u8g2_font_wqy16_t_gb2312, C(RGB_WHITE));
+  // ============== 顶部状态栏 (y=0-30, 黑底) ==============
+  tft.fillRect(0, 0, 320, 32, C(RGB_BLACK));
+  // 文字背景设为黑色 (顶栏内)
+  u8g2.setBackgroundColor(C(RGB_BLACK));
+  textCN(10,  22, "12:34",       u8g2_font_wqy16_t_gb2312, C(RGB_WHITE));
+  textCN(120, 22, "潜水中 5:23", u8g2_font_wqy16_t_gb2312, C(RGB_GREEN));
+  textCN(240, 22, "87% 海",      u8g2_font_wqy16_t_gb2312, C(RGB_WHITE));
+  // 恢复橘黄背景
+  u8g2.setBackgroundColor(C(RGB_ORANGE));
 
-  // ===== 大字深度区 (y=40-130) =====
-  drawCN(10, 105, "深度", u8g2_font_wqy16_t_gb2312, C(RGB_BLACK));
+  // ============== 大字深度 (y=40-130) ==============
+  textCN(10, 105, "深度", u8g2_font_wqy16_t_gb2312, C(RGB_BLACK));
 
-  // 大字 99.9 用 logisoso50_tn (50px)
+  // 大字 99.9 (logisoso50 = 50px 高)
   u8g2.setFont(u8g2_font_logisoso50_tn);
   u8g2.setForegroundColor(C(RGB_BLACK));
-  u8g2.setCursor(80, 120);
-  u8g2.print("99.9");
+  u8g2.drawStr(80, 125, "99.9");
 
-  drawCN(260, 105, "米", u8g2_font_wqy16_t_gb2312, C(RGB_BLACK));
+  textCN(260, 105, "米", u8g2_font_wqy16_t_gb2312, C(RGB_BLACK));
 
   // 分隔线
   tft.drawFastHLine(0, 140, 320, C(RGB_BLACK));
 
-  // ===== 数据区 (y=155-205) =====
-  drawCN(10,  165, "NDL",  u8g2_font_wqy16_t_gb2312, C(RGB_GREEN));
-  drawCN(55,  165, "23 分", u8g2_font_wqy16_t_gb2312, C(RGB_BLACK));
+  // ============== 数据区 (y=150-205, 4 项 2 列) ==============
+  // 行 1: NDL + N2
+  textCN(10,  165, "NDL",   u8g2_font_wqy16_t_gb2312, C(RGB_GREEN));
+  textCN(55,  165, "23 分", u8g2_font_wqy16_t_gb2312, C(RGB_BLACK));
+  textCN(170, 165, "N2",    u8g2_font_wqy16_t_gb2312, C(RGB_BLUE));
+  textCN(210, 165, "67%",   u8g2_font_wqy16_t_gb2312, C(RGB_BLACK));
 
-  drawCN(180, 165, "N2",   u8g2_font_wqy16_t_gb2312, C(RGB_BLUE));
-  drawCN(215, 165, "67%",  u8g2_font_wqy16_t_gb2312, C(RGB_BLACK));
+  // 行 2: 最深 + 温度
+  textCN(10,  190, "最深", u8g2_font_wqy16_t_gb2312, C(RGB_BLACK));
+  textCN(60,  190, "25.3", u8g2_font_wqy16_t_gb2312, C(RGB_BLACK));
+  textCN(110, 190, "米",   u8g2_font_wqy16_t_gb2312, C(RGB_BLACK));
+  textCN(170, 190, "温度", u8g2_font_wqy16_t_gb2312, C(RGB_BLACK));
+  textCN(220, 190, "18.5度", u8g2_font_wqy16_t_gb2312, C(RGB_BLACK));
 
-  drawCN(10,  190, "最深",  u8g2_font_wqy16_t_gb2312, C(RGB_BLACK));
-  drawCN(60,  190, "25.3 米", u8g2_font_wqy16_t_gb2312, C(RGB_BLACK));
-
-  drawCN(180, 190, "温度",  u8g2_font_wqy16_t_gb2312, C(RGB_BLACK));
-  drawCN(225, 190, "18.5度", u8g2_font_wqy16_t_gb2312, C(RGB_BLACK));
-
-  // ===== 底部状态条 (y=210-240) =====
-  tft.fillRect(0, 210, 320, 30, C(RGB_DARK));
-  drawCN(8, 232, "MODE:翻页  UP:重置  DOWN:计时",
+  // ============== 底部状态条 (y=210-240, 黑底) ==============
+  tft.fillRect(0, 210, 320, 30, C(RGB_BLACK));
+  u8g2.setBackgroundColor(C(RGB_BLACK));
+  textCN(8, 232, "MODE:翻页  UP:重置  DOWN:计时",
          u8g2_font_wqy13_t_gb2312, C(RGB_WHITE));
 
-  Serial.println("[v4] HUD 显示完成");
+  Serial.println("[v4 HUD] 渲染完成");
 }
 
 void loop() {
