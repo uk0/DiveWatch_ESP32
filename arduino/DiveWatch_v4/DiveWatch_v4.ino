@@ -491,7 +491,31 @@ void btnPoll(Button &b, uint32_t now) {
 }
 
 // ================== UI pages =========================================
-enum Page : uint8_t { PAGE_HUD = 0, PAGE_TISSUE, PAGE_N2, PAGE_PLAN, PAGE_AIR, PAGE_TEMP, PAGE_BAT, PAGE_LASTDIVE, PAGE_LOG, PAGE_STATS, PAGE_COUNT };
+enum Page : uint8_t { PAGE_HUD = 0, PAGE_PROFILE, PAGE_TISSUE, PAGE_N2, PAGE_PLAN, PAGE_AIR, PAGE_TEMP, PAGE_BAT, PAGE_LASTDIVE, PAGE_LOG, PAGE_STATS, PAGE_COUNT };
+
+// ===== 深度曲线采样 (PAGE_PROFILE) =====
+#define PROFILE_LEN 240                       // 240 点 × 5s = 20 分钟
+static uint8_t  g_profileBuf[PROFILE_LEN];    // 深度 * 5 (0..250 -> 0..50m)
+static uint16_t g_profileCount = 0;
+static uint16_t g_profileIdx = 0;
+static uint32_t g_profileLastMs = 0;
+#define PROFILE_SAMPLE_MS 5000U               // 5s 采样
+
+void sampleProfile(float depth, uint32_t now) {
+  if (!g_diving) {
+    if (g_profileCount > 0 && now - g_profileLastMs > 60000) {
+      g_profileCount = 0; g_profileIdx = 0;
+    }
+    return;
+  }
+  if (now - g_profileLastMs < PROFILE_SAMPLE_MS) return;
+  g_profileLastMs = now;
+  int v = (int)(depth * 5.0f + 0.5f);
+  if (v < 0) v = 0; if (v > 250) v = 250;
+  g_profileBuf[g_profileIdx] = (uint8_t)v;
+  g_profileIdx = (g_profileIdx + 1) % PROFILE_LEN;
+  if (g_profileCount < PROFILE_LEN) g_profileCount++;
+}
 uint8_t g_page = PAGE_HUD;
 uint8_t g_logViewIdx = 0;
 
@@ -1239,6 +1263,111 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
     u8g2.setForegroundColor(C(RGB_BLACK));
     u8g2.drawUTF8(276, 208, buf);
   }
+}
+
+void drawProfile(float depth) {
+  char buf[40];
+  tft.fillScreen(C(RGB_ORANGE));
+  uint16_t spanMin = (uint16_t)((uint32_t)g_profileCount * PROFILE_SAMPLE_MS / 60000);
+  snprintf(buf, sizeof(buf), "%.1fm × %u分", depth, spanMin);
+  drawTopHeader("潜水曲线", buf);
+  drawBottomButtonBar("翻页", "--", "--");
+
+  // 绘图区
+  int x0 = 8, y0 = 36, gw = 304, gh = 158;
+  tft.fillRect(x0, y0, gw, gh, C(RGB_DARK));
+
+  // 找当前最深
+  float maxD = depth;
+  for (int i = 0; i < g_profileCount; i++) {
+    float d = g_profileBuf[i] / 5.0f;
+    if (d > maxD) maxD = d;
+  }
+  if (maxD < 5.0f) maxD = 5.0f;
+  int yMax = ((int)maxD / 5 + 1) * 5;
+  if (yMax > 50) yMax = 50;
+
+  // 安全停留窗口 (2.5-6m 高亮区, 暗绿)
+  int ySS1 = y0 + 2 + (int)(SS_WINDOW_MIN / yMax * (gh - 4));
+  int ySS2 = y0 + 2 + (int)(SS_WINDOW_MAX / yMax * (gh - 4));
+  if (ySS1 < y0 + 2)      ySS1 = y0 + 2;
+  if (ySS2 > y0 + gh - 2) ySS2 = y0 + gh - 2;
+  if (ySS2 > ySS1) tft.fillRect(x0 + 1, ySS1, gw - 2, ySS2 - ySS1, 0x0320);
+
+  // Y 轴刻度
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
+  u8g2.setBackgroundColor(C(RGB_DARK));
+  for (int v = 5; v <= yMax; v += 5) {
+    int yt = y0 + 2 + (int)((float)v / yMax * (gh - 4));
+    if (yt > y0 + gh - 2) continue;
+    tft.drawFastHLine(x0 + 1, yt, gw - 2, C(RGB_WHITE));
+    char tk[6]; snprintf(tk, sizeof(tk), "%d", v);
+    u8g2.setForegroundColor(C(RGB_WHITE));
+    u8g2.drawUTF8(x0 + 3, yt + 11, tk);
+  }
+
+  // 深度报警线 (虚线红)
+  if (g_alarmDepth < yMax) {
+    int yAlarm = y0 + 2 + (int)((float)g_alarmDepth / yMax * (gh - 4));
+    for (int x = x0 + 1; x < x0 + gw - 1; x += 6) {
+      tft.drawFastHLine(x, yAlarm, 3, C(RGB_RED));
+    }
+  }
+
+  // 深度折线 (CYAN)
+  if (g_profileCount > 1) {
+    int start = (g_profileIdx + PROFILE_LEN - g_profileCount) % PROFILE_LEN;
+    int prevX = -1, prevY = -1;
+    int denom = g_profileCount - 1;
+    if (denom < 1) denom = 1;
+    for (int i = 0; i < g_profileCount; i++) {
+      int idx = (start + i) % PROFILE_LEN;
+      float d = g_profileBuf[idx] / 5.0f;
+      int xp = x0 + 2 + i * (gw - 4) / denom;
+      int yp = y0 + 2 + (int)(d / yMax * (gh - 4));
+      if (prevX >= 0) {
+        tft.drawLine(prevX, prevY, xp, yp, C(RGB_CYAN));
+        tft.drawLine(prevX, prevY + 1, xp, yp + 1, C(RGB_CYAN));
+      }
+      prevX = xp; prevY = yp;
+    }
+    if (prevX >= 0) {
+      tft.fillCircle(prevX, prevY, 4, C(RGB_YELLOW));
+      tft.drawCircle(prevX, prevY, 4, C(RGB_RED));
+    }
+  } else if (g_profileCount == 0) {
+    u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+    u8g2.setBackgroundColor(C(RGB_DARK));
+    u8g2.setForegroundColor(C(RGB_WHITE));
+    u8g2.drawUTF8(100, 110, "尚未开始潜水");
+    u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+    u8g2.drawUTF8(85, 130, "潜入水中后开始记录");
+  }
+
+  // 边框
+  tft.drawRect(x0, y0, gw, gh, C(RGB_BLACK));
+
+  // 底部数据条 (y=198..213)
+  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setBackgroundColor(C(RGB_ORANGE));
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  snprintf(buf, sizeof(buf), "最深 %.1fm", maxD);
+  u8g2.drawUTF8(10, 210, buf);
+  // 安全停留状态指示
+  if (g_ss == SS_RUNNING || g_ss == SS_ARMED) {
+    uint32_t remain = (g_ssAccumMs >= (uint32_t)g_safetyStopSec*1000UL) ? 0
+                      : ((uint32_t)g_safetyStopSec*1000UL - g_ssAccumMs);
+    snprintf(buf, sizeof(buf), "安停 %lus", (unsigned long)(remain/1000));
+    u8g2.setForegroundColor(C(RGB_RED));
+    u8g2.drawUTF8(140, 210, buf);
+  } else if (g_ss == SS_DONE) {
+    u8g2.setForegroundColor(C(RGB_GREEN));
+    u8g2.drawUTF8(140, 210, "安停完成");
+  }
+  // 右侧采样信息
+  snprintf(buf, sizeof(buf), "%u 点", g_profileCount);
+  u8g2.setForegroundColor(C(RGB_DARK));
+  u8g2.drawUTF8(260, 210, buf);
 }
 
 void drawTissue(float depth) {
@@ -2633,6 +2762,7 @@ void loop() {
     }
 
     updateSafetyStop(g_depthSmooth, now);
+    sampleProfile(g_depthSmooth, now);
   }
 
   uint32_t diveSec = g_diving ? (now - g_diveStartMs) / 1000 : 0;
@@ -2667,6 +2797,7 @@ void loop() {
     } else {
       switch (g_page) {
         case PAGE_HUD:      drawHud(g_depthSmooth, g_maxDepth, g_temp, ndl, g_ascentMpm, diveSec); break;
+        case PAGE_PROFILE:  drawProfile(g_depthSmooth); break;
         case PAGE_TISSUE:   drawTissue(g_depthSmooth); break;
         case PAGE_N2:       drawN2(); break;
         case PAGE_PLAN:     drawPlan(); break;
