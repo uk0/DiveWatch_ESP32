@@ -323,6 +323,57 @@ float computeTissueLoadPct(float depth_m) {
   return maxPct;
 }
 
+// Ceiling (最浅可上升深度, m). 0 = 可直接上水面
+float computeCeiling() {
+  float consFactor = (float)g_conservatism / 100.0f;
+  float maxCeilBar = g_surfacePressure / 1000.0f;
+  for (int i = 0; i < 16; i++) {
+    // Bühlmann: pAmb_min = (pN2 - A*consFactor) * B (反求允许的最小环境压)
+    float pAmb_min = (g_pN2[i] - A_N2[i] / consFactor) * B_N2[i] * consFactor;
+    if (pAmb_min > maxCeilBar) maxCeilBar = pAmb_min;
+  }
+  // bar -> m
+  float ceil_m = (maxCeilBar - g_surfacePressure / 1000.0f) * 1e5f / (g_fluidDensity * 9.80665f);
+  return ceil_m > 0 ? ceil_m : 0;
+}
+
+// TTS = Time To Surface (分钟). 含上升时间 + 减压停留 + 安全停留
+// 简化模型: 假设上升速率 g_ascentLimit (9 m/min), 减压在 Ceiling 上 3m 停留
+float computeTTS(float depth_m) {
+  if (depth_m < SURFACE_DEPTH) return 0.0f;
+  float ascentMpm = g_ascentLimit;
+  if (ascentMpm < 1.0f) ascentMpm = 9.0f;
+  float ceil_m = computeCeiling();
+  float tts = 0.0f;
+
+  if (ceil_m > 0.3f) {
+    // 需要减压: 从当前深度上升到第一个减压站
+    float stopDepth = ceilf(ceil_m / 3.0f) * 3.0f;   // 最近 3m 倍数 (3/6/9/...)
+    if (stopDepth > depth_m) stopDepth = depth_m;
+    tts += (depth_m - stopDepth) / ascentMpm;
+    // 估算停留时间 (简化: 用最饱和组织的半排时间近似)
+    float consFactor = (float)g_conservatism / 100.0f;
+    float pAmbStop_bar = (g_surfacePressure / 1000.0f) + stopDepth * g_fluidDensity * 9.80665f / 1e5f;
+    float maxStopMin = 0;
+    for (int i = 0; i < 16; i++) {
+      float Mv = (pAmbStop_bar / B_N2[i] + A_N2[i]) / consFactor;
+      if (g_pN2[i] > Mv) {
+        float k = 0.6931472f / HALF_TIMES_N2[i];      // 每分钟衰减系数
+        float t_min = -logf(Mv / g_pN2[i]) / k;
+        if (t_min > maxStopMin) maxStopMin = t_min;
+      }
+    }
+    tts += maxStopMin;
+    tts += stopDepth / ascentMpm;   // 从停留站上升到水面
+  } else {
+    // 无需减压: 直接上升
+    tts += depth_m / ascentMpm;
+    // 推荐安全停留 3 分钟 (>10m 潜水)
+    if (depth_m > 10.0f) tts += 3.0f;
+  }
+  return tts;
+}
+
 // 单个组织室的"饱和度": 当前 P_N2 相对于该深度平衡值的百分比
 // 0% = 水面平衡, 100% = 已在此深度完全饱和
 float computeSaturationPct(int idx, float depth_m) {
@@ -1177,10 +1228,20 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
   u8g2.drawUTF8(45, 161, buf);
   u8g2.setFont(u8g2_font_wqy16_t_gb2312);
   u8g2.setForegroundColor(C(RGB_BLACK));
-  // "分" 在大字数字后
-  int ndlW = (ndl >= 99.0f) ? u8g2.getUTF8Width(">99") : u8g2.getUTF8Width("99");  // 估算最宽
-  // 简化: 固定位置
   u8g2.drawUTF8(115, 159, "分");
+
+  // 中部: TTS (上升到水面时间, 仅潜水中显示)
+  if (g_diving && depth > 1.0f) {
+    float tts = computeTTS(depth);
+    u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+    u8g2.setForegroundColor(C(RGB_BLACK));
+    u8g2.drawUTF8(150, 145, "TTS");
+    u8g2.setFont(u8g2_font_logisoso24_tn);
+    if (tts > 99.0f) snprintf(buf, sizeof(buf), ">99");
+    else             snprintf(buf, sizeof(buf), "%.0f", tts);
+    u8g2.setForegroundColor((tts > 30 || ndl <= 0) ? C(RGB_RED) : C(RGB_BLACK));
+    u8g2.drawUTF8(150, 161, buf);
+  }
 
   // 右侧: 安停 / 减压 状态徽章 (y=136..160)
   if (ssActive) {
@@ -2293,6 +2354,154 @@ void drawTimeEdit() {
             u8g2_font_wqy16_t_gb2312);
 }
 
+// ========== 全屏告警 (红屏闪烁, 水下注意力锁定) ==========
+#define ALM_NONE       0
+#define ALM_DEPTH      1
+#define ALM_DECO       2
+#define ALM_ASCENT     3
+#define ALM_LOW_NDL    4
+#define ALM_LOW_BAT    5
+
+uint8_t  g_alarmType       = ALM_NONE;
+uint32_t g_alarmMutedUntil = 0;
+
+uint8_t checkAlarms(float depth, float ndl, float ascentMpm, int batPct) {
+  if (depth > g_alarmDepth)                       return ALM_DEPTH;
+  if (g_diving && ndl <= 0)                       return ALM_DECO;
+  if (ascentMpm > g_ascentLimit + 3.0f)            return ALM_ASCENT;
+  if (g_diving && ndl > 0 && ndl < 5)              return ALM_LOW_NDL;
+  if (batPct > 0 && batPct < 10)                   return ALM_LOW_BAT;
+  return ALM_NONE;
+}
+
+void drawFullScreenAlarm(uint8_t type, float depth, float ndl, float ascentMpm) {
+  tft.fillScreen(C(RGB_RED));
+  u8g2.setBackgroundColor(C(RGB_RED));
+  u8g2.setForegroundColor(C(RGB_WHITE));
+
+  const char *title = "警告";
+  char value[24] = "";
+  const char *action = "";
+
+  switch (type) {
+    case ALM_DEPTH:
+      title = "深度告警";
+      snprintf(value, sizeof(value), "%.1f 米", depth);
+      action = "立 即 上 升";
+      break;
+    case ALM_DECO:
+      title = "需要减压";
+      snprintf(value, sizeof(value), "NDL 已超");
+      action = "缓 慢 上 升";
+      break;
+    case ALM_ASCENT:
+      title = "上升过快";
+      snprintf(value, sizeof(value), "%.1f 米/分", ascentMpm);
+      action = "降速到 9 以内";
+      break;
+    case ALM_LOW_NDL:
+      title = "NDL 警告";
+      snprintf(value, sizeof(value), "%.0f 分钟", ndl);
+      action = "尽 快 上 升";
+      break;
+    case ALM_LOW_BAT:
+      title = "电量过低";
+      snprintf(value, sizeof(value), "%d %%", g_batPct);
+      action = "尽 快 返 水 面";
+      break;
+  }
+
+  // 上方 X 边框
+  tft.drawRect(4, 4, 312, 232, C(RGB_WHITE));
+  tft.drawRect(6, 6, 308, 228, C(RGB_WHITE));
+
+  // 标题大字
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+  int w = u8g2.getUTF8Width(title);
+  u8g2.drawUTF8(160 - w/2, 50, title);
+  // 大字数值
+  u8g2.setFont(u8g2_font_logisoso28_tn);
+  w = u8g2.getUTF8Width(value);
+  u8g2.drawUTF8(160 - w/2, 115, value);
+  // 中文措施 (中等字体)
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+  w = u8g2.getUTF8Width(action);
+  u8g2.drawUTF8(160 - w/2, 160, action);
+  // 底部提示
+  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.drawUTF8(70, 215, "按 M 键暂停告警 60 秒");
+}
+
+// ========== 进入/退出潜水画面 ==========
+uint32_t g_diveEnterShowUntil = 0;     // 显示"开始潜水"画面到此时刻
+uint32_t g_diveExitShowUntil  = 0;     // 显示总结画面到此时刻
+float    g_diveExitMaxDepth   = 0;
+uint32_t g_diveExitDuration   = 0;
+float    g_diveExitMinTemp    = 0;
+float    g_diveExitAvgDepth   = 0;
+
+void drawDiveEnter() {
+  tft.fillScreen(C(RGB_ORANGE));
+  u8g2.setBackgroundColor(C(RGB_ORANGE));
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  // 大字 "开始潜水"
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+  // 用 wqy16 重复绘制模拟大字 (因为 logisoso 仅数字)
+  u8g2.drawUTF8(125, 90, "开始潜水");
+  // 实际大字效果用 logisoso28 + 中文字描述
+  u8g2.setFont(u8g2_font_logisoso28_tn);
+  u8g2.drawUTF8(140, 140, "GO!");
+  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.drawUTF8(100, 175, "祝你潜水愉快, 注意安全");
+}
+
+void drawDiveExitSummary() {
+  tft.fillScreen(C(RGB_ORANGE));
+  // 顶栏
+  tft.fillRect(0, 0, 320, 28, C(RGB_BLACK));
+  tft.drawFastHLine(0, 28, 320, C(RGB_BLACK));
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+  u8g2.setBackgroundColor(C(RGB_BLACK));
+  u8g2.setForegroundColor(C(RGB_WHITE));
+  u8g2.drawUTF8(108, 21, "潜水结束 - 总结");
+  // 中央大字最深深度
+  u8g2.setBackgroundColor(C(RGB_ORANGE));
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  char buf[40];
+  u8g2.setFont(u8g2_font_logisoso42_tr);
+  snprintf(buf, sizeof(buf), "%.1f", g_diveExitMaxDepth);
+  int w = u8g2.getUTF8Width(buf);
+  u8g2.drawUTF8(160 - w/2 - 6, 95, buf);
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+  u8g2.drawUTF8(160 - w/2 + w/2 - 5 + w/2 - w/2 + 8, 100, "m");
+  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  int lblW = u8g2.getUTF8Width("最深深度");
+  u8g2.drawUTF8(160 - lblW/2, 115, "最深深度");
+  // 数据条 2x2
+  tft.drawFastHLine(20, 130, 280, C(RGB_BLACK));
+  tft.drawFastVLine(160, 135, 65, C(RGB_BLACK));
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
+  u8g2.drawUTF8(30,  150, "时长");
+  u8g2.drawUTF8(180, 150, "最低温");
+  u8g2.drawUTF8(30,  180, "平均");
+  u8g2.drawUTF8(180, 180, "海/淡");
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+  snprintf(buf, sizeof(buf), "%lu:%02lu",
+           (unsigned long)(g_diveExitDuration / 60), (unsigned long)(g_diveExitDuration % 60));
+  u8g2.drawUTF8(80, 167, buf);
+  snprintf(buf, sizeof(buf), "%.1f度", g_diveExitMinTemp);
+  u8g2.drawUTF8(225, 167, buf);
+  snprintf(buf, sizeof(buf), "%.1fm", g_diveExitAvgDepth);
+  u8g2.drawUTF8(80, 197, buf);
+  u8g2.drawUTF8(225, 197, g_fluidDensity > 1010 ? "海水" : "淡水");
+  // 底部
+  tft.fillRect(0, 215, 320, 25, C(RGB_BLACK));
+  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setBackgroundColor(C(RGB_BLACK));
+  u8g2.setForegroundColor(C(RGB_WHITE));
+  u8g2.drawUTF8(80, 232, "按任意键回到主屏");
+}
+
 void drawSplash() {
   tft.fillScreen(C(RGB_ORANGE));
 
@@ -2820,6 +3029,7 @@ void loop() {
       g_currentSacL = 0;
       g_diveDepthSum = 0;       // 平均深度累计重置
       g_diveTimeMs = 0;
+      g_diveEnterShowUntil = now + 1500;     // 显示"开始潜水"画面 1.5s
       Serial.println("[DIVE] Started");
     } else if (g_diving && g_depthSmooth < SURFACE_DEPTH) {
       // End dive: persist
@@ -2841,6 +3051,12 @@ void loop() {
           avgDep
         };
         saveDiveToNVS(rec);
+        // 触发出水总结画面 (5 秒, 或按键退出)
+        g_diveExitMaxDepth  = rec.maxDepth;
+        g_diveExitDuration  = rec.durationSec;
+        g_diveExitMinTemp   = rec.minTemp;
+        g_diveExitAvgDepth  = rec.avgDepth;
+        g_diveExitShowUntil = now + 5000;
         Serial.printf("[DIVE] Saved: max=%.1fm dur=%us minT=%.1fC end=%lu bat=%.2fV air=%.0fL\n",
                       rec.maxDepth, rec.durationSec, rec.minTemp,
                       (unsigned long)rec.endEpoch, rec.batVoltage, rec.airUsedL);
@@ -2902,7 +3118,22 @@ void loop() {
     }
   }
 
-  if (!g_screenOff && (pageChanged || timeToRender || g_pageDirty)) {
+  // ===== 告警/进出水画面优先级判断 =====
+  uint8_t alm = checkAlarms(g_depthSmooth, ndl, g_ascentMpm, g_batPct);
+  g_alarmType = alm;
+  // 任意按键按下时暂停告警 60 秒
+  bool anyBtn = g_btnMode.evShort || g_btnUp.evShort || g_btnDown.evShort;
+  if (anyBtn && alm != ALM_NONE) {
+    g_alarmMutedUntil = now + 60000;
+    // 同时关闭进出水画面 (用户主动操作)
+    if (g_diveExitShowUntil > now) g_diveExitShowUntil = 0;
+  }
+  bool alarmActive = (alm != ALM_NONE) && (now > g_alarmMutedUntil);
+  bool inEnterAnim = (g_diveEnterShowUntil > now);
+  bool inExitAnim  = (g_diveExitShowUntil > now);
+
+  if (!g_screenOff && (pageChanged || timeToRender || g_pageDirty
+                       || alarmActive || inEnterAnim || inExitAnim)) {
     lastRender = now;
     if (pageChanged) {
       tft.fillScreen(C(RGB_ORANGE));
@@ -2911,6 +3142,28 @@ void loop() {
       prevPage = g_page;
       prevEdit = g_editingTime;
       prevSettings = g_inSettings;
+    }
+
+    // 1. 全屏告警 (最高优先级, 闪烁 500ms)
+    if (alarmActive && (now / 500) % 2 == 0) {
+      drawFullScreenAlarm(alm, g_depthSmooth, ndl, g_ascentMpm);
+      s_lastPage = 255;   // 闪回正常页时强制重画
+      goto render_done;
+    }
+    // 2. 进入潜水欢迎画面
+    if (inEnterAnim) {
+      static bool s_enterDrawn = false;
+      if (!s_enterDrawn) { drawDiveEnter(); s_enterDrawn = true; }
+      if (!inEnterAnim) s_enterDrawn = false;
+      s_lastPage = 255;
+      goto render_done;
+    }
+    // 3. 出水总结画面
+    if (inExitAnim) {
+      static bool s_exitDrawn = false;
+      if (!s_exitDrawn) { drawDiveExitSummary(); s_exitDrawn = true; }
+      s_lastPage = 255;
+      goto render_done;
     }
 
     if (g_editingTime) {
@@ -2932,6 +3185,7 @@ void loop() {
         case PAGE_STATS:    drawStats();    break;
       }
     }
+    render_done:;
     g_pageDirty = false;
   }
 
