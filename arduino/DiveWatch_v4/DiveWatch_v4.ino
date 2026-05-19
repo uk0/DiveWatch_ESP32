@@ -724,112 +724,176 @@ float depthFromPressure(float pressureMbar) {
 inline void drawDivider() {
   tft.drawFastHLine(0, 12, 128, C(RGB_BLACK));
 }
-void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm, uint32_t diveSec) {
-  tft.fillScreen(C(RGB_ORANGE)); u8g2.setBackgroundColor(C(RGB_ORANGE));
+// ============== v4 HUD - 320x240 横屏布局 ==============
+// 用 static lastPage 跟踪页面切换, 切页时全屏清, 否则只局部清
+// 避免每帧 fillScreen 闪烁
+static uint8_t s_lastPage = 255;          // 强制首次重画
+static char    s_lastTime[8] = "";        // 上次时钟字符串, 变了才重画
+static float   s_lastDepth = -999;
+static float   s_lastTemp = -999;
+static float   s_lastNdl = -999;
+static int     s_lastBat = -1;
+static bool    s_lastDiving = false;
+
+void drawHudStaticFrame() {
+  // 一次性画静态背景 (页面切换时调用)
+  tft.fillScreen(C(RGB_ORANGE));
+  // 顶栏
+  tft.fillRect(0, 0, 320, 36, C(RGB_BLACK));
+  // 底栏
+  tft.fillRect(0, 210, 320, 30, C(RGB_BLACK));
+  // 标签
+  u8g2.setBackgroundColor(C(RGB_ORANGE));
   u8g2.setFont(FONT_CN);
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  u8g2.drawUTF8(10, 165, "NDL");
+  u8g2.drawUTF8(180, 165, "N2");
+  u8g2.drawUTF8(10, 190, "最深");
+  u8g2.drawUTF8(180, 190, "温度");
+  u8g2.drawUTF8(10, 205, "上升");
+  // 底栏操作提示
+  u8g2.setBackgroundColor(C(RGB_BLACK));
+  u8g2.setForegroundColor(C(RGB_WHITE));
+  u8g2.drawUTF8(8, 230, "MODE:翻页  UP:重置  DOWN:计时");
+  u8g2.setBackgroundColor(C(RGB_ORANGE));
+  // 分隔线
+  tft.drawFastHLine(0, 140, 320, C(RGB_BLACK));
+}
 
-  char buf[40];
-  uint8_t hh, mm, ss;
-  getCurrentTime(hh, mm, ss);
-
-  // 顶部 y=10 (字符占 1-11)
-  // 左: 时钟 (0-30)
-  snprintf(buf, sizeof(buf), "%02u:%02u", hh, mm);
-  u8g2.drawUTF8(0, 10, buf);
-
-  // 海/淡 标识固定在最右 (118-128)
-  u8g2.drawUTF8(118, 10, g_fluidDensity > 1010 ? "海" : "淡");
-
-  if (g_diving) {
-    // 潜水时: 中央显示潜水时长 + 右侧显示纯数字百分比 (无图标避免重叠)
-    snprintf(buf, sizeof(buf), "潜%lu:%02lu", (unsigned long)(diveSec / 60), (unsigned long)(diveSec % 60));
-    int w = u8g2.getUTF8Width(buf);
-    u8g2.drawUTF8(36, 10, buf);  // 紧贴时钟右边
-    if (g_batPresent) {
-      snprintf(buf, sizeof(buf), "%d%%", g_batPct);
-      int pw = u8g2.getUTF8Width(buf);
-      u8g2.drawUTF8(116 - pw, 10, buf);  // 紧贴海/淡左
-    }
-  } else {
-    // 水面时: 显示电池图标 + 百分比 (中央留空)
-    if (g_batPresent) {
-      drawBatteryIcon(72, 2);
-      snprintf(buf, sizeof(buf), "%d%%", g_batPct);
-      u8g2.drawUTF8(92, 10, buf);
-    }
+void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm, uint32_t diveSec) {
+  // 切页或首次进入: 画完整背景
+  if (s_lastPage != PAGE_HUD) {
+    s_lastPage = PAGE_HUD;
+    drawHudStaticFrame();
+    s_lastTime[0] = 0; s_lastDepth = s_lastTemp = s_lastNdl = -999; s_lastBat = -1;
   }
 
-  // 报警状态检测 (用于大字反色显示)
+  char buf[40];
+
+  // ===== 顶栏 (黑底白字, y=0-36) =====
+  u8g2.setBackgroundColor(C(RGB_BLACK));
+  u8g2.setForegroundColor(C(RGB_WHITE));
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+
+  uint8_t hh, mm, ss;
+  getCurrentTime(hh, mm, ss);
+  snprintf(buf, sizeof(buf), "%02u:%02u", hh, mm);
+  if (strcmp(buf, s_lastTime) != 0) {
+    strcpy(s_lastTime, buf);
+    tft.fillRect(8, 8, 60, 24, C(RGB_BLACK));
+    u8g2.drawUTF8(8, 26, buf);
+  }
+
+  // 潜水时长 (中部)
+  tft.fillRect(80, 8, 160, 24, C(RGB_BLACK));
+  if (g_diving) {
+    snprintf(buf, sizeof(buf), "潜水中 %lu:%02lu", (unsigned long)(diveSec / 60), (unsigned long)(diveSec % 60));
+    u8g2.setForegroundColor(C(RGB_GREEN));
+    u8g2.drawUTF8(95, 26, buf);
+  } else {
+    u8g2.setForegroundColor(C(RGB_WHITE));
+    u8g2.drawUTF8(130, 26, "水面");
+  }
+
+  // 电池 + 海淡
+  tft.fillRect(240, 8, 80, 24, C(RGB_BLACK));
+  if (g_batPresent) {
+    snprintf(buf, sizeof(buf), "%d%% %s", g_batPct, g_fluidDensity > 1010 ? "海" : "淡");
+    u8g2.setForegroundColor(C(RGB_WHITE));
+    u8g2.drawUTF8(245, 26, buf);
+  } else {
+    u8g2.drawUTF8(245, 26, g_fluidDensity > 1010 ? "海" : "淡");
+  }
+
+  // ===== 大字深度 (橘黄底, y=40-130) =====
+  u8g2.setBackgroundColor(C(RGB_ORANGE));
   bool depthAlarm = depth > g_alarmDepth;
   bool decoAlarm  = (ndl <= 0.0f) && g_diving;
   bool alarmRev   = depthAlarm || decoAlarm;
 
-  // 大字深度 y=36 (logisoso24, 字符占 12-36)
-  if (depth < 100.0f) snprintf(buf, sizeof(buf), "%4.1f", depth);
-  else                snprintf(buf, sizeof(buf), "%4.0f", depth);
-  u8g2.setFont(u8g2_font_logisoso24_tn);
-  int dw = u8g2.getUTF8Width(buf);
-  int dx = (128 - dw - 14) / 2;
-  if (dx < 0) dx = 0;
-
-  // 警告时大字区域反色 (黑底白字)
-  if (alarmRev) {
-    tft.fillRect(0, 13, 128, 25, C(RGB_BLACK));          // 实心黑色块覆盖大字区
-    u8g2.setForegroundColor(C(RGB_WHITE));                  // 之后画的内容反色 (变白)
-  }
-  u8g2.drawStr(dx, 36, buf);
-  u8g2.setFont(FONT_CN);
-  u8g2.drawUTF8(dx + dw + 2, 34, "米");
-  if (alarmRev) u8g2.setForegroundColor(C(RGB_BLACK));     // 恢复正常颜色
-
-  // 中部 y=48: NDL / 状态 (左) + 最深 (右)
-  // 安全停留/减压等关键状态时让出整行, 不挤"最深"
-  bool ssActive = (g_ss == SS_RUNNING || g_ss == SS_ARMED);
-  bool decoNow  = (ndl <= 0.0f) && g_diving;
-
-  if (ssActive) {
-    uint32_t remain = (g_ssAccumMs >= g_safetyStopSec * 1000UL) ? 0 : (g_safetyStopSec * 1000UL - g_ssAccumMs);
-    snprintf(buf, sizeof(buf), "安全停留 %lu 秒", (unsigned long)(remain / 1000));
-    u8g2.drawUTF8(0, 48, buf);
-  } else if (g_ss == SS_DONE) {
-    u8g2.drawUTF8(0, 48, "安全停留完成");
-  } else if (decoNow) {
-    u8g2.drawUTF8(0, 48, "需要减压!");
-  } else if (ndl >= 99.0f) {
-    u8g2.drawUTF8(0, 48, "NDL >99 分");
-  } else {
-    snprintf(buf, sizeof(buf), "NDL %2.0f 分", ndl);
-    u8g2.drawUTF8(0, 48, buf);
-  }
-
-  // 中部右: N2 负荷% (潜水时) 或 最深 (非潜水时)
-  // 关键状态 (安全停留/减压/SS完成) 时不显示右侧, 让左边状态字占整行
-  if (!ssActive && g_ss != SS_DONE && !decoNow) {
-    if (g_diving) {
-      // 潜水中: 显示氮气负荷, 更关键
-      float n2Pct = computeTissueLoadPct(depth);
-      snprintf(buf, sizeof(buf), "N2 %.0f%%", n2Pct);
+  if (depth != s_lastDepth) {
+    s_lastDepth = depth;
+    // 清大字区
+    if (alarmRev) {
+      tft.fillRect(0, 40, 320, 95, C(RGB_BLACK));
+      u8g2.setBackgroundColor(C(RGB_BLACK));
+      u8g2.setForegroundColor(C(RGB_WHITE));
     } else {
-      snprintf(buf, sizeof(buf), "最深%.1f", maxDepth);
+      tft.fillRect(0, 40, 320, 95, C(RGB_ORANGE));
+      u8g2.setForegroundColor(C(RGB_BLACK));
     }
-    int w = u8g2.getUTF8Width(buf);
-    u8g2.drawUTF8(126 - w, 48, buf);
+    // 大字 logisoso50 (50px)
+    u8g2.setFont(u8g2_font_logisoso50_tn);
+    if (depth < 100.0f) snprintf(buf, sizeof(buf), "%4.1f", depth);
+    else                snprintf(buf, sizeof(buf), "%4.0f", depth);
+    int dw = u8g2.getUTF8Width(buf);
+    int dx = (320 - dw - 50) / 2;
+    u8g2.drawUTF8(dx, 110, buf);
+    // 米单位
+    u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+    u8g2.drawUTF8(dx + dw + 10, 110, "米");
+    if (alarmRev) {
+      u8g2.setBackgroundColor(C(RGB_ORANGE));
+      u8g2.setForegroundColor(C(RGB_BLACK));
+    }
   }
 
-  // 底部 y=60 (字符占 48-60, 与中部 36-48 间距 0): 温度 + 上升速率
-  snprintf(buf, sizeof(buf), "%.1f度", temp);
-  u8g2.drawUTF8(0, 60, buf);
+  // ===== 数据区 (y=150-210) =====
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+  u8g2.setBackgroundColor(C(RGB_ORANGE));
 
-  snprintf(buf, sizeof(buf), "%+.1f米/分", ascentMpm);
-  int w = u8g2.getUTF8Width(buf);
-  u8g2.drawUTF8(126 - w, 60, buf);
+  // NDL 数值 (右于"NDL" 标签)
+  if (ndl != s_lastNdl) {
+    s_lastNdl = ndl;
+    tft.fillRect(55, 150, 110, 20, C(RGB_ORANGE));
+    bool ssActive = (g_ss == SS_RUNNING || g_ss == SS_ARMED);
+    if (ssActive) {
+      uint32_t remain = (g_ssAccumMs >= g_safetyStopSec * 1000UL) ? 0 : (g_safetyStopSec * 1000UL - g_ssAccumMs);
+      snprintf(buf, sizeof(buf), "安停%lus", (unsigned long)(remain / 1000));
+      u8g2.setForegroundColor(C(RGB_RED));
+    } else if (g_ss == SS_DONE) {
+      snprintf(buf, sizeof(buf), "已完成");
+      u8g2.setForegroundColor(C(RGB_GREEN));
+    } else if (decoAlarm) {
+      snprintf(buf, sizeof(buf), "需减压!");
+      u8g2.setForegroundColor(C(RGB_RED));
+    } else if (ndl >= 99.0f) {
+      snprintf(buf, sizeof(buf), ">99分");
+      u8g2.setForegroundColor(C(RGB_GREEN));
+    } else {
+      snprintf(buf, sizeof(buf), "%.0f 分", ndl);
+      u8g2.setForegroundColor(ndl < 5 ? C(RGB_RED) : C(RGB_BLACK));
+    }
+    u8g2.drawUTF8(55, 165, buf);
+  }
 
-  // 警告标志 (右边缘 x=118 留 4px 边距)
-  if (depth > g_alarmDepth)            u8g2.drawUTF8(118, 22, "!");
-  if (ascentMpm > g_ascentLimit)       u8g2.drawUTF8(118, 34, "^");  // 上升过快
-  if (-ascentMpm > g_descentLimit && g_diving)
-                                        u8g2.drawUTF8(118, 60, "v");  // 下降过快
+  // N2 负荷
+  tft.fillRect(220, 150, 90, 20, C(RGB_ORANGE));
+  float n2Pct = computeTissueLoadPct(depth);
+  snprintf(buf, sizeof(buf), "%.0f%%", n2Pct);
+  u8g2.setForegroundColor(n2Pct > 80 ? C(RGB_RED) : (n2Pct > 60 ? C(RGB_BLUE) : C(RGB_BLACK)));
+  u8g2.drawUTF8(220, 165, buf);
 
+  // 最深
+  tft.fillRect(60, 175, 110, 20, C(RGB_ORANGE));
+  snprintf(buf, sizeof(buf), "%.1f米", maxDepth);
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  u8g2.drawUTF8(60, 190, buf);
+
+  // 温度
+  if (temp != s_lastTemp) {
+    s_lastTemp = temp;
+    tft.fillRect(220, 175, 90, 20, C(RGB_ORANGE));
+    snprintf(buf, sizeof(buf), "%.1f度", temp);
+    u8g2.setForegroundColor(temp < g_lowTempC ? C(RGB_BLUE) : C(RGB_BLACK));
+    u8g2.drawUTF8(220, 190, buf);
+  }
+
+  // 上升速率
+  tft.fillRect(60, 195, 200, 18, C(RGB_ORANGE));
+  snprintf(buf, sizeof(buf), "%+.1f 米/分", ascentMpm);
+  u8g2.setForegroundColor((ascentMpm > g_ascentLimit || -ascentMpm > g_descentLimit) ? C(RGB_RED) : C(RGB_BLACK));
+  u8g2.drawUTF8(60, 208, buf);
 }
 
 void drawTissue(float depth) {
@@ -1668,10 +1732,26 @@ void setup() {
   g_editingTime = false;
   g_inSettings  = false;
   g_screenOff   = false;
-  // 清空可能因 setup 期间按键抖动产生的事件
   g_btnMode.evShort = g_btnMode.evLong = false;
   g_btnUp.evShort   = g_btnUp.evLong   = false;
   g_btnDown.evShort = g_btnDown.evLong = false;
+
+  // 重置潜水统计变量 (避免 NVS 残留乱值)
+  g_maxDepth = 0;
+  g_lastDepth = 0;
+  g_diveDepthSum = 0;
+  g_diveTimeMs = 0;
+  g_ascentMpm = 0;
+  g_diving = false;
+
+  // Sanity check: NVS 加载的设置如果在异常范围, 用默认值
+  if (g_conservatism < 50 || g_conservatism > 200)  g_conservatism = 100;
+  if (g_fluidDensity < 500 || g_fluidDensity > 2000) g_fluidDensity = 1029;
+  if (g_alarmDepth < 5 || g_alarmDepth > 100)       g_alarmDepth = 30;
+  if (g_ascentLimit < 1 || g_ascentLimit > 50)      g_ascentLimit = 9;
+  if (g_descentLimit < 1 || g_descentLimit > 100)   g_descentLimit = 18;
+  Serial.printf("[SANITY] cons=%u density=%.0f alarmD=%.0f ascent=%.0f descent=%.0f\n",
+                g_conservatism, g_fluidDensity, g_alarmDepth, g_ascentLimit, g_descentLimit);
 
   g_lastInteractMs = millis();
 }
@@ -1929,25 +2009,42 @@ void loop() {
   uint32_t diveSec = g_diving ? (now - g_diveStartMs) / 1000 : 0;
   float ndl = computeNDL(g_depthSmooth);
 
-  // ---- Render ----
-  if (g_screenOff) {
-    // skip rendering while screen is off
-  } else if (g_editingTime) {
-    drawTimeEdit();
-  } else if (g_inSettings) {
-    drawSettingsAndSend();
-  } else {
-    switch (g_page) {
-      case PAGE_HUD:      drawHud(g_depthSmooth, g_maxDepth, g_temp, ndl, g_ascentMpm, diveSec); break;
-      case PAGE_TISSUE:   drawTissue(g_depthSmooth); break;
-      case PAGE_N2:       drawN2(); break;
-      case PAGE_PLAN:     drawPlan(); break;
-      case PAGE_AIR:      drawAir(); break;
-      case PAGE_TEMP:     drawTempChart(); break;
-      case PAGE_BAT:      drawBatHist(); break;
-      case PAGE_LASTDIVE: drawLastDive(); break;
-      case PAGE_LOG:      drawLogList();  break;
-      case PAGE_STATS:    drawStats();    break;
+  // ---- Render (限频 200ms, 减少闪烁) ----
+  static uint32_t lastRender = 0;
+  static uint8_t  prevPage   = 255;
+  static bool     prevEdit   = false;
+  static bool     prevSettings = false;
+
+  bool pageChanged = (g_page != prevPage) || (g_editingTime != prevEdit) || (g_inSettings != prevSettings);
+  bool timeToRender = (now - lastRender > 200);
+
+  if (!g_screenOff && (pageChanged || timeToRender)) {
+    lastRender = now;
+    if (pageChanged) {
+      tft.fillScreen(C(RGB_ORANGE));   // 切页统一清屏
+      s_lastPage = 255;                // 强制 HUD 重画静态部分
+      prevPage = g_page;
+      prevEdit = g_editingTime;
+      prevSettings = g_inSettings;
+    }
+
+    if (g_editingTime) {
+      drawTimeEdit();
+    } else if (g_inSettings) {
+      drawSettingsAndSend();
+    } else {
+      switch (g_page) {
+        case PAGE_HUD:      drawHud(g_depthSmooth, g_maxDepth, g_temp, ndl, g_ascentMpm, diveSec); break;
+        case PAGE_TISSUE:   drawTissue(g_depthSmooth); break;
+        case PAGE_N2:       drawN2(); break;
+        case PAGE_PLAN:     drawPlan(); break;
+        case PAGE_AIR:      drawAir(); break;
+        case PAGE_TEMP:     drawTempChart(); break;
+        case PAGE_BAT:      drawBatHist(); break;
+        case PAGE_LASTDIVE: drawLastDive(); break;
+        case PAGE_LOG:      drawLogList();  break;
+        case PAGE_STATS:    drawStats();    break;
+      }
     }
   }
 
