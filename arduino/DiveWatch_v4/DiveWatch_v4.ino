@@ -1747,7 +1747,7 @@ void setup() {
   // ---- ST7789 SPI 显示初始化 ----
   mySPI.begin(TFT_SCK, -1, TFT_MOSI, TFT_CS);
   tft.init(240, 320);
-  tft.setSPISpeed(10000000);
+  tft.setSPISpeed(40000000);             // 40MHz 提升 4 倍速度, 全屏刷 ~30ms
   tft.setRotation(1);                    // 横屏 320x240
   tft.invertDisplay(true);
   tft.fillScreen(C(RGB_ORANGE));
@@ -1897,7 +1897,8 @@ void loop() {
     // ---- Time-edit mode: buttons remapped ----
     if (g_btnMode.evShort) {
       g_btnMode.evShort = false;
-      g_editField = 1 - g_editField;     // toggle HH <-> MM
+      g_editField = 1 - g_editField;
+      g_pageDirty = true;                          // 触发重画
     }
     if (g_btnMode.evLong) {
       g_btnMode.evLong = false;
@@ -1905,6 +1906,7 @@ void loop() {
       setSystemClock(g_editHH, g_editMM, 0);
       saveClockToNVS();
       g_editingTime = false;
+      g_pageDirty = true;
       Serial.printf("[ACTION] Clock set to %02u:%02u\n", g_editHH, g_editMM);
       beepBlocking(2, 80);
     }
@@ -1912,13 +1914,14 @@ void loop() {
       g_btnUp.evShort = false;
       if (g_editField == 0) g_editHH = (g_editHH + 1) % 24;
       else                  g_editMM = (g_editMM + 1) % 60;
+      g_pageDirty = true;
     }
     if (g_btnDown.evShort) {
       g_btnDown.evShort = false;
       if (g_editField == 0) g_editHH = (g_editHH + 23) % 24;
       else                  g_editMM = (g_editMM + 59) % 60;
+      g_pageDirty = true;
     }
-    // Discard unused long-press events while editing
     g_btnUp.evLong = false;
     g_btnDown.evLong = false;
   } else if (g_inSettings) {
@@ -1926,21 +1929,25 @@ void loop() {
     if (g_btnMode.evShort) {
       g_btnMode.evShort = false;
       g_settingsItem = (g_settingsItem + 1) % SETTINGS_COUNT;
+      g_pageDirty = true;                          // 触发重画
     }
     if (g_btnMode.evLong) {
       g_btnMode.evLong = false;
       saveSettingsToNVS();
       g_inSettings = false;
+      g_pageDirty = true;
       beepBlocking(2, 80);
       Serial.println("[ACTION] Settings saved & exit");
     }
     if (g_btnUp.evShort) {
       g_btnUp.evShort = false;
       settingsItemAdjust(g_settingsItem, +1);
+      g_pageDirty = true;                          // 改值后强制重画显示新值
     }
     if (g_btnDown.evShort) {
       g_btnDown.evShort = false;
       settingsItemAdjust(g_settingsItem, -1);
+      g_pageDirty = true;
     }
     g_btnUp.evLong = false;
     g_btnDown.evLong = false;
