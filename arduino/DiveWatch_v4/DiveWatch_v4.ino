@@ -196,6 +196,7 @@ uint8_t  g_planDepthM    = 18;      // 用户在 PAGE_PLAN 设的计划深度
 // Power saving: dim OLED after idle period (g_screenOffMs is configurable)
 uint32_t g_lastInteractMs  = 0;
 bool     g_screenOff       = false;
+bool     g_pageDirty       = true;        // 切页或首次进入, 触发静态部分重绘
 
 // Settings menu state
 bool     g_inSettings        = false;
@@ -706,7 +707,39 @@ float depthFromPressure(float pressureMbar) {
   return d < 0 ? 0 : d;
 }
 
-// ================== Drawing (中文 UI) ================================
+// ================== Drawing (320x240 v4 UI) ==========================
+// 通用 helpers - 黑底白字标题栏 / 底栏 / 中文文字
+void v4DrawHeader(const char *title, const char *rightInfo = nullptr) {
+  tft.fillRect(0, 0, 320, 32, C(RGB_BLACK));
+  u8g2.setBackgroundColor(C(RGB_BLACK));
+  u8g2.setForegroundColor(C(RGB_WHITE));
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+  u8g2.drawUTF8(10, 22, title);
+  if (rightInfo) {
+    int w = u8g2.getUTF8Width(rightInfo);
+    u8g2.drawUTF8(310 - w, 22, rightInfo);
+  }
+  u8g2.setBackgroundColor(C(RGB_ORANGE));
+  u8g2.setForegroundColor(C(RGB_BLACK));
+}
+
+void v4DrawFooter(const char *tip) {
+  tft.fillRect(0, 210, 320, 30, C(RGB_BLACK));
+  u8g2.setBackgroundColor(C(RGB_BLACK));
+  u8g2.setForegroundColor(C(RGB_WHITE));
+  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.drawUTF8(8, 228, tip);
+  u8g2.setBackgroundColor(C(RGB_ORANGE));
+  u8g2.setForegroundColor(C(RGB_BLACK));
+}
+
+void v4Text(int x, int y, const char *s, uint16_t color, const uint8_t *font = u8g2_font_wqy16_t_gb2312) {
+  u8g2.setFont(font);
+  u8g2.setForegroundColor(color);
+  u8g2.drawUTF8(x, y, s);
+}
+
+// ================== Drawing (legacy 128x64, 待迁移) ==================
 // 字体说明:
 //   u8g2_font_wqy12_t_chinese1  -> 12px 中文(约1000常用字), 含ASCII
 //   u8g2_font_logisoso28_tn     -> 大字数字(深度)
@@ -897,152 +930,177 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
 }
 
 void drawTissue(float depth) {
-  tft.fillScreen(C(RGB_ORANGE)); u8g2.setBackgroundColor(C(RGB_ORANGE));
-  u8g2.setFont(FONT_CN);
-  // y=10 标题 + 最大百分比
-  u8g2.drawUTF8(0, 10, "组织负荷");
-  drawDivider();
-
-  float pct = computeTissueLoadPct(depth);
   char buf[32];
-  snprintf(buf, sizeof(buf), "最大%3.0f%%", pct);
-  int w = u8g2.getUTF8Width(buf);
-  u8g2.drawUTF8(126 - w, 10, buf);
+  float pct = computeTissueLoadPct(depth);
+  snprintf(buf, sizeof(buf), "最大 %.0f%%", pct);
+  v4DrawHeader("组织负荷 16室", buf);
 
-  // 16 房间柱状图 y=14-46 (高 32)
-  int x0 = 0;
-  int barW = 7;
-  int gap  = 1;
-  int yTop = 14;
-  int hMax = 32;
+  // 局部清内容区
+  tft.fillRect(0, 36, 320, 174, C(RGB_ORANGE));
+
+  // 16 房间柱状图 (320 宽, 每柱 14px + 6 gap)
+  int barW = 14, gap = 6, x0 = 8, yTop = 50, hMax = 120;
   for (int i = 0; i < 16; i++) {
     float pAmb_bar = (g_surfacePressure / 1000.0f) + depth * g_fluidDensity * 9.80665f / 1e5f;
     float Mv = pAmb_bar / B_N2[i] + A_N2[i];
-    float p  = g_pN2[i] / Mv;
+    float p = g_pN2[i] / Mv;
     if (p > 1.0f) p = 1.0f;
     if (p < 0.0f) p = 0.0f;
     int h = (int)(p * hMax);
     int x = x0 + i * (barW + gap);
+    uint16_t fill = (p > 0.8f) ? C(RGB_RED) : (p > 0.6f) ? C(RGB_BLUE) : C(RGB_BLACK);
     tft.drawRect(x, yTop, barW, hMax, C(RGB_BLACK));
-    tft.fillRect(x, yTop + (hMax - h), barW, h, C(RGB_BLACK));
+    tft.fillRect(x, yTop + (hMax - h), barW, h, fill);
   }
 
-  // y=58 底部: NDL
+  // 底部 NDL
   float ndl = computeNDL(depth);
-  if (ndl >= 99.0f)      snprintf(buf, sizeof(buf), "NDL >99 分");
-  else if (ndl <= 0.0f)  snprintf(buf, sizeof(buf), "需要减压");
-  else                   snprintf(buf, sizeof(buf), "NDL %.0f 分钟", ndl);
-  u8g2.drawUTF8(0, 58, buf);
+  uint16_t color = C(RGB_BLACK);
+  if (ndl >= 99.0f)      snprintf(buf, sizeof(buf), "NDL  >99 分"), color = C(RGB_GREEN);
+  else if (ndl <= 0.0f)  snprintf(buf, sizeof(buf), "需要减压"), color = C(RGB_RED);
+  else                   snprintf(buf, sizeof(buf), "NDL  %.0f 分钟", ndl), color = (ndl < 5) ? C(RGB_RED) : C(RGB_BLACK);
+  v4Text(10, 195, buf, color);
+
+  v4DrawFooter("16 个组织室惰性气体负荷可视化");
 }
 
 void drawLastDive() {
-  tft.fillScreen(C(RGB_ORANGE)); u8g2.setBackgroundColor(C(RGB_ORANGE));
-  u8g2.setFont(FONT_CN);
-  // y=10 标题 + 累计
-  u8g2.drawUTF8(0, 10, "上次潜水");
-  drawDivider();
-  char buf[40];
-  snprintf(buf, sizeof(buf), "累计%u次", g_diveTotal);
-  int w = u8g2.getUTF8Width(buf);
-  u8g2.drawUTF8(126 - w, 10, buf);
+  char hdrR[24];
+  snprintf(hdrR, sizeof(hdrR), "累计 %u 次", g_diveTotal);
+  v4DrawHeader("上次潜水", hdrR);
+  v4DrawFooter("MODE:翻页");
+
+  tft.fillRect(0, 36, 320, 174, C(RGB_ORANGE));
+  char buf[48];
 
   if (g_logCount == 0) {
-    u8g2.drawUTF8(0, 36, "无潜水记录");
-  } else {
-    DiveRecord &r = g_log[0];
-    // y=22/34/46/58 (4 行, 12 间距, 不重叠)
-    snprintf(buf, sizeof(buf), "最深  %.1f 米", r.maxDepth);
-    u8g2.drawUTF8(0, 22, buf);
-    if (r.avgDepth > 0.1f) {
-      snprintf(buf, sizeof(buf), "时长 %u:%02u 均%.1fm", r.durationSec/60, r.durationSec%60, r.avgDepth);
-    } else {
-      snprintf(buf, sizeof(buf), "时长  %u:%02u", r.durationSec/60, r.durationSec%60);
-    }
-    u8g2.drawUTF8(0, 34, buf);
-    snprintf(buf, sizeof(buf), "温度  %.1f 度",  r.minTemp);
-    u8g2.drawUTF8(0, 46, buf);
+    v4Text(20, 110, "无潜水记录", C(RGB_BLACK));
+    return;
+  }
 
-    // y=58 底部: 海/淡 + 距今时间
-    if (r.endEpoch > 0) {
-      time_t nowEpoch;
-      time(&nowEpoch);
-      int32_t intervalSec = (int32_t)((uint32_t)nowEpoch - r.endEpoch);
-      if (intervalSec >= 0 && intervalSec < 99 * 3600) {
-        snprintf(buf, sizeof(buf), "%s 距今%ldh%02ldm",
-                 r.saltwater ? "海水" : "淡水",
-                 (long)(intervalSec / 3600), (long)((intervalSec / 60) % 60));
-      } else {
-        snprintf(buf, sizeof(buf), "%s", r.saltwater ? "海水" : "淡水");
-      }
-    } else {
-      snprintf(buf, sizeof(buf), "%s", r.saltwater ? "海水" : "淡水");
+  DiveRecord &r = g_log[0];
+  // 大字最深深度
+  u8g2.setFont(u8g2_font_logisoso26_tn);
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  snprintf(buf, sizeof(buf), "%.1f", r.maxDepth);
+  int dw = u8g2.getUTF8Width(buf);
+  u8g2.drawUTF8(20, 90, buf);
+  v4Text(30 + dw, 90, "米 最深", C(RGB_BLACK));
+
+  // 4 行数据 (y=120/145/170/195)
+  snprintf(buf, sizeof(buf), "时长  %u:%02u", r.durationSec/60, r.durationSec%60);
+  v4Text(20, 122, buf, C(RGB_BLACK));
+  if (r.avgDepth > 0.1f) {
+    snprintf(buf, sizeof(buf), "均深  %.1f 米", r.avgDepth);
+    v4Text(180, 122, buf, C(RGB_BLACK));
+  }
+
+  snprintf(buf, sizeof(buf), "温度  %.1f 度", r.minTemp);
+  v4Text(20, 148, buf, C(RGB_BLACK));
+
+  if (r.batVoltage > 0.1f) {
+    snprintf(buf, sizeof(buf), "电池  %.2f V", r.batVoltage);
+    v4Text(180, 148, buf, C(RGB_BLACK));
+  }
+
+  v4Text(20, 174, r.saltwater ? "海水" : "淡水", C(RGB_BLACK));
+  if (r.airUsedL > 1.0f) {
+    snprintf(buf, sizeof(buf), "耗气  %.0f L", r.airUsedL);
+    v4Text(100, 174, buf, C(RGB_BLACK));
+  }
+
+  // 距今时间
+  if (r.endEpoch > 0) {
+    time_t nowEpoch;
+    time(&nowEpoch);
+    int32_t intervalSec = (int32_t)((uint32_t)nowEpoch - r.endEpoch);
+    if (intervalSec >= 0 && intervalSec < 99 * 3600) {
+      snprintf(buf, sizeof(buf), "距今 %ldh%02ldm",
+               (long)(intervalSec / 3600), (long)((intervalSec / 60) % 60));
+      v4Text(20, 200, buf, C(RGB_BLUE));
     }
-    u8g2.drawUTF8(0, 58, buf);
   }
 }
 
 void drawLogList() {
-  tft.fillScreen(C(RGB_ORANGE)); u8g2.setBackgroundColor(C(RGB_ORANGE));
-  u8g2.setFont(FONT_CN);
-  // y=10 标题 + N/M
-  u8g2.drawUTF8(0, 10, "潜水日志");
-  drawDivider();
-  char buf[40];
-  snprintf(buf, sizeof(buf), "%u/%u", g_logViewIdx + 1, g_logCount);
-  int w = u8g2.getUTF8Width(buf);
-  u8g2.drawUTF8(126 - w, 10, buf);
+  char hdrR[24];
+  snprintf(hdrR, sizeof(hdrR), "%u/%u", g_logViewIdx + 1, g_logCount);
+  v4DrawHeader("潜水日志", hdrR);
+  v4DrawFooter("UP/DOWN 浏览  长按DOWN在LOG页清空");
+
+  tft.fillRect(0, 36, 320, 174, C(RGB_ORANGE));
+
+  char buf[48];
 
   if (g_logCount == 0) {
-    u8g2.drawUTF8(0, 36, "日志为空");
-  } else {
-    if (g_logViewIdx >= g_logCount) g_logViewIdx = g_logCount - 1;
-    DiveRecord &r = g_log[g_logViewIdx];
-    // y=22/34/46/58 (4 行, 12 间距)
-    snprintf(buf, sizeof(buf), "#%u 最深%.1f米", g_diveTotal - g_logViewIdx, r.maxDepth);
-    u8g2.drawUTF8(0, 22, buf);
-    snprintf(buf, sizeof(buf), "时长 %u:%02u  %s", r.durationSec/60, r.durationSec%60, r.saltwater ? "海" : "淡");
-    u8g2.drawUTF8(0, 34, buf);
-    if (r.batVoltage > 0.1f) {
-      snprintf(buf, sizeof(buf), "温%.1f度 电%.2fV", r.minTemp, r.batVoltage);
-    } else {
-      snprintf(buf, sizeof(buf), "温度 %.1f 度", r.minTemp);
-    }
-    u8g2.drawUTF8(0, 46, buf);
-    if (r.airUsedL > 1.0f) {
-      snprintf(buf, sizeof(buf), "耗气 %.0fL", r.airUsedL);
-    } else {
-      snprintf(buf, sizeof(buf), "上下键浏览");
-    }
-    u8g2.drawUTF8(0, 58, buf);
+    v4Text(20, 110, "日志为空", C(RGB_BLACK));
+    return;
+  }
+
+  if (g_logViewIdx >= g_logCount) g_logViewIdx = g_logCount - 1;
+  DiveRecord &r = g_log[g_logViewIdx];
+
+  // 大字: # 序号
+  u8g2.setFont(u8g2_font_logisoso26_tn);
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  snprintf(buf, sizeof(buf), "#%u", g_diveTotal - g_logViewIdx);
+  u8g2.drawUTF8(20, 80, buf);
+
+  // 最深  (大字右边)
+  snprintf(buf, sizeof(buf), "%.1f", r.maxDepth);
+  u8g2.drawUTF8(140, 80, buf);
+  v4Text(230, 80, "米 最深", C(RGB_BLACK));
+
+  // 4 行细节
+  snprintf(buf, sizeof(buf), "时长  %u:%02u", r.durationSec/60, r.durationSec%60);
+  v4Text(20, 115, buf, C(RGB_BLACK));
+  v4Text(180, 115, r.saltwater ? "海水" : "淡水", C(RGB_BLACK));
+
+  snprintf(buf, sizeof(buf), "温度  %.1f 度", r.minTemp);
+  v4Text(20, 145, buf, C(RGB_BLACK));
+  if (r.batVoltage > 0.1f) {
+    snprintf(buf, sizeof(buf), "电池 %.2fV", r.batVoltage);
+    v4Text(180, 145, buf, C(RGB_BLACK));
+  }
+
+  if (r.airUsedL > 1.0f) {
+    snprintf(buf, sizeof(buf), "耗气  %.0f L", r.airUsedL);
+    v4Text(20, 175, buf, C(RGB_BLACK));
+  }
+  if (r.avgDepth > 0.1f) {
+    snprintf(buf, sizeof(buf), "均深  %.1f m", r.avgDepth);
+    v4Text(180, 175, buf, C(RGB_BLACK));
   }
 }
 
 void drawAir() {
-  tft.fillScreen(C(RGB_ORANGE)); u8g2.setBackgroundColor(C(RGB_ORANGE));
-  u8g2.setFont(FONT_CN);
-
-  char buf[40];
-  uint16_t total_L = totalAirL();   // 当前满瓶总气量 L
-  // y=10 标题 + 当前消耗速率 (bar/min)
-  u8g2.drawUTF8(0, 10, "气量监控");
-  drawDivider();
-  if (g_diving && g_currentSacL > 0.1f) {
-    float currentBarMin = (g_tankVolL > 0) ? (g_currentSacL / g_tankVolL) : 0;
-    snprintf(buf, sizeof(buf), "%.1fbar/分", currentBarMin);
-    int w = u8g2.getUTF8Width(buf);
-    u8g2.drawUTF8(126 - w, 10, buf);
-  } else {
-    int w = u8g2.getUTF8Width("水面");
-    u8g2.drawUTF8(126 - w, 10, "水面");
-  }
-
-  // y=22 剩余压力 + 百分比 (主要数据)
+  char buf[48];
+  uint16_t total_L = totalAirL();
   float remainingBar = barFromAirL(g_remainingAirL);
   uint8_t pct = (total_L > 0) ? (uint8_t)((g_remainingAirL / total_L) * 100.0f) : 0;
-  snprintf(buf, sizeof(buf), "剩压 %3d bar  %3d%%", (int)remainingBar, pct);
-  u8g2.drawUTF8(0, 22, buf);
 
-  // y=34 可潜时间 (Air Time)
+  // 顶栏右侧: 消耗速率
+  if (g_diving && g_currentSacL > 0.1f) {
+    float currentBarMin = (g_tankVolL > 0) ? (g_currentSacL / g_tankVolL) : 0;
+    snprintf(buf, sizeof(buf), "%.1f bar/min", currentBarMin);
+  } else {
+    snprintf(buf, sizeof(buf), "水面");
+  }
+  v4DrawHeader("气量监控", buf);
+  v4DrawFooter("瓶配置在设置中修改");
+
+  tft.fillRect(0, 36, 320, 174, C(RGB_ORANGE));
+
+  // 大字剩余压力
+  u8g2.setFont(u8g2_font_logisoso26_tn);
+  u8g2.setForegroundColor(pct < 25 ? C(RGB_RED) : (pct < 50 ? C(RGB_BLUE) : C(RGB_BLACK)));
+  snprintf(buf, sizeof(buf), "%3d", (int)remainingBar);
+  u8g2.drawUTF8(20, 90, buf);
+  v4Text(110, 90, "bar", C(RGB_BLACK));
+  snprintf(buf, sizeof(buf), "%d%%", pct);
+  v4Text(220, 90, buf, C(RGB_BLACK));
+
+  // Air Time
   if (g_diving && g_currentSacL > 0.1f) {
     int airMin = (int)(g_remainingAirL / g_currentSacL);
     if (airMin > 999) airMin = 999;
@@ -1050,134 +1108,127 @@ void drawAir() {
   } else {
     snprintf(buf, sizeof(buf), "Air Time  --");
   }
-  u8g2.drawUTF8(0, 34, buf);
+  v4Text(20, 130, buf, C(RGB_BLACK));
 
-  // y=46 瓶配置
-  snprintf(buf, sizeof(buf), "瓶 %dbar*%dL  SAC%d", g_initialBar, g_tankVolL, g_sacLmin);
-  u8g2.drawUTF8(0, 46, buf);
+  // 瓶配置
+  snprintf(buf, sizeof(buf), "瓶  %d bar × %d L   SAC %d L/分",
+           g_initialBar, g_tankVolL, g_sacLmin);
+  v4Text(20, 160, buf, C(RGB_BLACK));
 
-  // y=52-60 压力条 (按总压力 0-g_initialBar)
-  int barY = 54;
-  int barH = 8;
-  tft.drawRect(0, barY, 128, barH, C(RGB_BLACK));
-  int fillW = (g_initialBar > 0)
-      ? (int)((126.0f) * (remainingBar / g_initialBar))
-      : 0;
-  if (fillW < 0) fillW = 0;
-  if (fillW > 126) fillW = 126;
-  if (fillW > 0) tft.fillRect(1, barY + 1, fillW, barH - 2, C(RGB_BLACK));
-
+  // 大压力条 (y=180-200)
+  int barY = 180, barH = 20;
+  tft.drawRect(20, barY, 280, barH, C(RGB_BLACK));
+  int fillW = (g_initialBar > 0) ? (int)(278.0f * remainingBar / g_initialBar) : 0;
+  if (fillW > 278) fillW = 278;
+  uint16_t barColor = (pct < 25) ? C(RGB_RED) : (pct < 50) ? C(RGB_BLUE) : C(RGB_GREEN);
+  if (fillW > 0) tft.fillRect(21, barY + 1, fillW, barH - 2, barColor);
 }
 
 // 体内氮气安全页 - 基于 ZHL-16C 衍生指标
 void drawN2() {
-  tft.fillScreen(C(RGB_ORANGE)); u8g2.setBackgroundColor(C(RGB_ORANGE));
-  u8g2.setFont(FONT_CN);
-  u8g2.drawUTF8(0, 10, "体内氮气 ZHL-16");
-  drawDivider();
+  v4DrawHeader("体内氮气 ZHL-16C");
+  v4DrawFooter("基于 Bühlmann 模型");
 
+  tft.fillRect(0, 36, 320, 174, C(RGB_ORANGE));
   char buf[40];
-  // 1. 氮气负荷 % + 风险等级 (左/右)
+
+  // 1. 大字: 氮气负荷 % + 风险
   float loadPct = computeTissueLoadPct(g_depthSmooth);
-  const char* risk;
-  if (loadPct < 60.0f)      risk = "低";
-  else if (loadPct < 80.0f) risk = "中";
-  else                       risk = "高";
+  const char *risk;
+  uint16_t riskColor;
+  if (loadPct < 60.0f)      { risk = "低风险"; riskColor = C(RGB_GREEN); }
+  else if (loadPct < 80.0f) { risk = "中风险"; riskColor = C(RGB_BLUE); }
+  else                       { risk = "高风险"; riskColor = C(RGB_RED); }
 
-  snprintf(buf, sizeof(buf), "负荷 %.0f%%", loadPct);
-  u8g2.drawUTF8(0, 24, buf);
-  snprintf(buf, sizeof(buf), "风险 %s", risk);
-  int w = u8g2.getUTF8Width(buf);
-  u8g2.drawUTF8(126 - w, 24, buf);
+  u8g2.setFont(u8g2_font_logisoso26_tn);
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  snprintf(buf, sizeof(buf), "%.0f", loadPct);
+  u8g2.drawUTF8(20, 80, buf);
+  v4Text(85, 80, "%", C(RGB_BLACK));
+  v4Text(20, 100, "氮气负荷", C(RGB_BLACK));
 
-  // 2. 最快(4min) + 最慢(635min) 组织室饱和度
+  v4Text(200, 80, risk, riskColor);
+
+  // 2. 最快/最慢组织室
   float fastSat = computeSaturationPct(0,  g_depthSmooth);
   float slowSat = computeSaturationPct(15, g_depthSmooth);
-  snprintf(buf, sizeof(buf), "快 %.0f%%  慢 %.0f%%", fastSat, slowSat);
-  u8g2.drawUTF8(0, 36, buf);
+  snprintf(buf, sizeof(buf), "最快 %.0f%%   最慢 %.0f%%", fastSat, slowSat);
+  v4Text(20, 130, buf, C(RGB_BLACK));
 
-  // 3. 禁飞时间 (NoFly time)
+  // 3. 禁飞时间
   float noFlyH = computeNoFlyTimeHours();
   if (noFlyH < 0.05f) {
-    snprintf(buf, sizeof(buf), "禁飞   可飞行");
+    v4Text(20, 160, "禁飞:  可飞行", C(RGB_GREEN));
   } else if (noFlyH < 100.0f) {
-    int h = (int)noFlyH;
-    int m = (int)((noFlyH - h) * 60);
-    snprintf(buf, sizeof(buf), "禁飞   %dh%02dm", h, m);
+    snprintf(buf, sizeof(buf), "禁飞:  %dh%02dm",
+             (int)noFlyH, (int)((noFlyH - (int)noFlyH) * 60));
+    v4Text(20, 160, buf, C(RGB_RED));
   } else {
-    snprintf(buf, sizeof(buf), "禁飞   >100h");
+    v4Text(20, 160, "禁飞:  >100h", C(RGB_RED));
   }
-  u8g2.drawUTF8(0, 48, buf);
 
-  // 4. 完全脱饱和时间
+  // 4. 完全脱饱和
   float desatH = computeFullDesaturationHours();
   if (desatH < 0.05f) {
-    snprintf(buf, sizeof(buf), "脱饱和 已完成");
+    v4Text(20, 190, "脱饱和:  已完成", C(RGB_GREEN));
   } else if (desatH < 100.0f) {
-    snprintf(buf, sizeof(buf), "脱饱和 %.0fh", desatH);
+    snprintf(buf, sizeof(buf), "脱饱和:  %.0f 小时", desatH);
+    v4Text(20, 190, buf, C(RGB_BLACK));
   } else {
-    snprintf(buf, sizeof(buf), "脱饱和 >100h");
+    v4Text(20, 190, "脱饱和:  >100 小时", C(RGB_BLACK));
   }
-  u8g2.drawUTF8(0, 60, buf);
-
 }
 
 void drawPlan() {
-  tft.fillScreen(C(RGB_ORANGE)); u8g2.setBackgroundColor(C(RGB_ORANGE));
-  u8g2.setFont(FONT_CN);
-  // y=10 标题 + 当前深度
-  u8g2.drawUTF8(0, 10, "潜水规划");
-  drawDivider();
-  char buf[40];
-  snprintf(buf, sizeof(buf), "当前 %.1fm", g_depthSmooth);
-  int w = u8g2.getUTF8Width(buf);
-  u8g2.drawUTF8(126 - w, 10, buf);
+  char hdrR[24];
+  snprintf(hdrR, sizeof(hdrR), "当前 %.1f m", g_depthSmooth);
+  v4DrawHeader("潜水规划", hdrR);
+  v4DrawFooter("UP/DOWN 改计划深度");
 
-  // y=22 计划深度
-  snprintf(buf, sizeof(buf), "计划深度 %u 米", g_planDepthM);
-  u8g2.drawUTF8(0, 22, buf);
+  tft.fillRect(0, 36, 320, 174, C(RGB_ORANGE));
+  char buf[48];
 
-  // y=34 该深度的 NDL
+  // 大字: 计划深度
+  u8g2.setFont(u8g2_font_logisoso26_tn);
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  snprintf(buf, sizeof(buf), "%u", g_planDepthM);
+  u8g2.drawUTF8(20, 90, buf);
+  v4Text(110, 90, "米 计划深度", C(RGB_BLACK));
+
+  // NDL @ 该深度
   float ndl = computeNDL((float)g_planDepthM);
-  if (ndl >= 99.0f)      snprintf(buf, sizeof(buf), "NDL %d 米 >99 分", g_planDepthM);
-  else if (ndl <= 0.0f)  snprintf(buf, sizeof(buf), "NDL %d 米 需减压!", g_planDepthM);
-  else                   snprintf(buf, sizeof(buf), "NDL %d 米 %.0f 分", g_planDepthM, ndl);
-  u8g2.drawUTF8(0, 34, buf);
+  uint16_t color = C(RGB_BLACK);
+  if (ndl >= 99.0f)      snprintf(buf, sizeof(buf), "NDL  >99 分钟"), color = C(RGB_GREEN);
+  else if (ndl <= 0.0f)  snprintf(buf, sizeof(buf), "NDL  需要减压!"), color = C(RGB_RED);
+  else                   snprintf(buf, sizeof(buf), "NDL  %.0f 分钟", ndl), color = (ndl < 5) ? C(RGB_RED) : C(RGB_BLACK);
+  v4Text(20, 130, buf, color);
 
-  // y=46 该深度的 Air Time (满瓶估算)
+  // Air Time @ 该深度
   uint16_t total_L = totalAirL();
   float sacAtDepth = g_sacLmin * (1.0f + g_planDepthM / 10.0f);
   if (sacAtDepth > 0) {
     int airMin = (int)(total_L / sacAtDepth);
     if (airMin > 999) airMin = 999;
-    snprintf(buf, sizeof(buf), "满瓶气量 %d 分钟", airMin);
+    snprintf(buf, sizeof(buf), "满瓶气量  %d 分钟", airMin);
   } else {
-    snprintf(buf, sizeof(buf), "满瓶气量 --");
+    snprintf(buf, sizeof(buf), "满瓶气量  --");
   }
-  u8g2.drawUTF8(0, 46, buf);
+  v4Text(20, 160, buf, C(RGB_BLACK));
 
-  // y=58 操作提示
-  u8g2.drawUTF8(0, 58, "上下键改深度");
+  // 提示
+  v4Text(20, 195, "潜前规划工具, 估算该深度安全潜水时长", C(RGB_DARK), u8g2_font_wqy13_t_gb2312);
 }
 
 void drawTempChart() {
-  tft.fillScreen(C(RGB_ORANGE)); u8g2.setBackgroundColor(C(RGB_ORANGE));
-  u8g2.setFont(FONT_CN);
+  char buf[40];
+  snprintf(buf, sizeof(buf), "%.1f度 (%u/60)", g_temp, g_tempHistCount);
+  v4DrawHeader("温度趋势 1h", buf);
+  v4DrawFooter("每分钟一个采样, 60 个 = 1 小时");
 
-  char buf[24];
-  // y=10 标题 + 当前温度
-  snprintf(buf, sizeof(buf), "温度 %.1f度", g_temp);
-  u8g2.drawUTF8(0, 10, buf);
-  drawDivider();
-
-  // y=10 右上: 采样进度
-  snprintf(buf, sizeof(buf), "%u/60", g_tempHistCount);
-  int w = u8g2.getUTF8Width(buf);
-  u8g2.drawUTF8(126 - w, 10, buf);
+  tft.fillRect(0, 36, 320, 174, C(RGB_ORANGE));
 
   if (g_tempHistCount < 2) {
-    u8g2.drawUTF8(0, 34, "数据收集中...");
-    u8g2.drawUTF8(0, 46, "每分钟一个样本");
+    v4Text(20, 110, "数据收集中, 每分钟一个样本", C(RGB_BLACK));
     return;
   }
 
@@ -1189,27 +1240,27 @@ void drawTempChart() {
   }
   if (maxT - minT < 0.5f) { float c = (maxT + minT) / 2; minT = c - 0.25f; maxT = c + 0.25f; }
 
-  // Y 轴标签 (左侧, 紧凑)
-  snprintf(buf, sizeof(buf), "%4.1f", maxT);
-  u8g2.drawUTF8(0, 22, buf);
-  snprintf(buf, sizeof(buf), "%4.1f", minT);
-  u8g2.drawUTF8(0, 58, buf);
+  // Y 轴标签
+  snprintf(buf, sizeof(buf), "%.1f", maxT);
+  v4Text(5, 60, buf, C(RGB_BLACK), u8g2_font_wqy13_t_gb2312);
+  snprintf(buf, sizeof(buf), "%.1f", minT);
+  v4Text(5, 195, buf, C(RGB_BLACK), u8g2_font_wqy13_t_gb2312);
 
-  // 绘图区: x=28-126, y=16-58 (宽 98, 高 42)
-  int x0 = 28, y0 = 16, gw = 98, gh = 42;
+  // 绘图区 x=50-310 y=50-200 (260x150)
+  int x0 = 50, y0 = 50, gw = 260, gh = 150;
   tft.drawRect(x0, y0, gw, gh, C(RGB_BLACK));
 
   // 折线
   for (int i = 0; i < g_tempHistCount - 1; i++) {
     int idx1 = (g_tempHistIdx + TEMP_HIST_LEN - g_tempHistCount + i) % TEMP_HIST_LEN;
     int idx2 = (g_tempHistIdx + TEMP_HIST_LEN - g_tempHistCount + i + 1) % TEMP_HIST_LEN;
-    int x1 = x0 + 1 + i * (gw - 2) / (g_tempHistCount - 1);
-    int x2 = x0 + 1 + (i + 1) * (gw - 2) / (g_tempHistCount - 1);
-    int y1 = y0 + gh - 2 - (int)((g_tempHist[idx1] - minT) * (gh - 4) / (maxT - minT));
-    int y2 = y0 + gh - 2 - (int)((g_tempHist[idx2] - minT) * (gh - 4) / (maxT - minT));
-    tft.drawLine(x1, y1, x2, y2, C(RGB_BLACK));
+    int x1 = x0 + 2 + i * (gw - 4) / (g_tempHistCount - 1);
+    int x2 = x0 + 2 + (i + 1) * (gw - 4) / (g_tempHistCount - 1);
+    int y1 = y0 + gh - 4 - (int)((g_tempHist[idx1] - minT) * (gh - 8) / (maxT - minT));
+    int y2 = y0 + gh - 4 - (int)((g_tempHist[idx2] - minT) * (gh - 8) / (maxT - minT));
+    tft.drawLine(x1, y1, x2, y2, C(RGB_BLUE));
+    tft.drawLine(x1, y1 + 1, x2, y2 + 1, C(RGB_BLUE));  // 加粗
   }
-
 }
 
 void recordTempSample(uint32_t now) {
@@ -1232,25 +1283,19 @@ void recordBatHistSample(uint32_t now) {
 }
 
 void drawBatHist() {
-  tft.fillScreen(C(RGB_ORANGE)); u8g2.setBackgroundColor(C(RGB_ORANGE));
-  u8g2.setFont(FONT_CN);
-  // y=10 标题 + 当前电压/百分比
-  char buf[40];
-  u8g2.drawUTF8(0, 10, "电池趋势");
-  drawDivider();
-  if (g_batPresent) {
-    snprintf(buf, sizeof(buf), "%.2fV %u%%", g_batVoltage, g_batPct);
-  } else {
-    snprintf(buf, sizeof(buf), "未接入");
-  }
-  int w = u8g2.getUTF8Width(buf);
-  u8g2.drawUTF8(126 - w, 10, buf);
+  char hdrR[24];
+  if (g_batPresent) snprintf(hdrR, sizeof(hdrR), "%.2fV %u%%", g_batVoltage, g_batPct);
+  else              snprintf(hdrR, sizeof(hdrR), "未接入");
+  v4DrawHeader("电池趋势 24h", hdrR);
+  v4DrawFooter("每小时采样一次, 24 个 = 1 天");
 
-  // 中部说明
+  tft.fillRect(0, 36, 320, 174, C(RGB_ORANGE));
+
+  char buf[40];
   if (g_batHistCount < 2) {
-    snprintf(buf, sizeof(buf), "已采 %u/24 小时", g_batHistCount);
-    u8g2.drawUTF8(0, 34, buf);
-    u8g2.drawUTF8(0, 46, "每小时采样一次");
+    snprintf(buf, sizeof(buf), "已采集 %u/24 小时", g_batHistCount);
+    v4Text(20, 110, buf, C(RGB_BLACK));
+    v4Text(20, 140, "等待数据中...", C(RGB_BLACK));
     return;
   }
 
@@ -1264,64 +1309,62 @@ void drawBatHist() {
 
   // Y 轴标签
   snprintf(buf, sizeof(buf), "%.2f", maxV);
-  u8g2.drawUTF8(0, 22, buf);
+  v4Text(5, 60, buf, C(RGB_BLACK), u8g2_font_wqy13_t_gb2312);
   snprintf(buf, sizeof(buf), "%.2f", minV);
-  u8g2.drawUTF8(0, 58, buf);
+  v4Text(5, 195, buf, C(RGB_BLACK), u8g2_font_wqy13_t_gb2312);
 
-  // 绘图区 x=28-126 y=16-58
-  int x0 = 28, y0 = 16, gw = 98, gh = 42;
+  // 绘图区 x=50-310 y=50-200
+  int x0 = 50, y0 = 50, gw = 260, gh = 150;
   tft.drawRect(x0, y0, gw, gh, C(RGB_BLACK));
 
   // 折线
   for (int i = 0; i < g_batHistCount - 1; i++) {
     int idx1 = (g_batHistIdx + BAT_HIST_LEN - g_batHistCount + i) % BAT_HIST_LEN;
     int idx2 = (g_batHistIdx + BAT_HIST_LEN - g_batHistCount + i + 1) % BAT_HIST_LEN;
-    int x1 = x0 + 1 + i * (gw - 2) / (g_batHistCount - 1);
-    int x2 = x0 + 1 + (i + 1) * (gw - 2) / (g_batHistCount - 1);
-    int y1 = y0 + gh - 2 - (int)((g_batHist[idx1] - minV) * (gh - 4) / (maxV - minV));
-    int y2 = y0 + gh - 2 - (int)((g_batHist[idx2] - minV) * (gh - 4) / (maxV - minV));
-    tft.drawLine(x1, y1, x2, y2, C(RGB_BLACK));
+    int x1 = x0 + 2 + i * (gw - 4) / (g_batHistCount - 1);
+    int x2 = x0 + 2 + (i + 1) * (gw - 4) / (g_batHistCount - 1);
+    int y1 = y0 + gh - 4 - (int)((g_batHist[idx1] - minV) * (gh - 8) / (maxV - minV));
+    int y2 = y0 + gh - 4 - (int)((g_batHist[idx2] - minV) * (gh - 8) / (maxV - minV));
+    tft.drawLine(x1, y1, x2, y2, C(RGB_GREEN));
+    tft.drawLine(x1, y1 + 1, x2, y2 + 1, C(RGB_GREEN));
   }
 
 }
 
 void drawStats() {
-  tft.fillScreen(C(RGB_ORANGE)); u8g2.setBackgroundColor(C(RGB_ORANGE));
-  u8g2.setFont(FONT_CN);
-  // y=10 标题 + 电池
-  u8g2.drawUTF8(0, 10, "总览统计");
-  drawDivider();
-
-  char buf[40];
-  // 标题右: 海拔 (海平面附近不显示)
+  char hdrR[24];
   float alt = estimateAltitudeM();
-  if (alt > 50.0f) snprintf(buf, sizeof(buf), "海拔%.0fm", alt);
-  else if (g_batPresent) snprintf(buf, sizeof(buf), "%.2fV %u%%", g_batVoltage, g_batPct);
-  else snprintf(buf, sizeof(buf), "未接电池");
-  int w = u8g2.getUTF8Width(buf);
-  u8g2.drawUTF8(126 - w, 10, buf);
+  if (alt > 50.0f) snprintf(hdrR, sizeof(hdrR), "海拔 %.0fm", alt);
+  else if (g_batPresent) snprintf(hdrR, sizeof(hdrR), "%.2fV %u%%", g_batVoltage, g_batPct);
+  else snprintf(hdrR, sizeof(hdrR), "未接电池");
+  v4DrawHeader("总览统计", hdrR);
+  v4DrawFooter("终身潜水数据汇总");
 
-  // y=22/34/46/58 (4 行)
-  snprintf(buf, sizeof(buf), "潜水次数  %u 次", g_diveTotal);
-  u8g2.drawUTF8(0, 22, buf);
+  tft.fillRect(0, 36, 320, 174, C(RGB_ORANGE));
 
-  snprintf(buf, sizeof(buf), "历史最深  %.1f 米", g_diveTotalMaxD);
-  u8g2.drawUTF8(0, 34, buf);
+  char buf[48];
+  // 4 行数据 y=70/110/150/190
+  snprintf(buf, sizeof(buf), "潜水次数      %u 次", g_diveTotal);
+  v4Text(30, 70, buf, C(RGB_BLACK));
+
+  snprintf(buf, sizeof(buf), "历史最深      %.1f 米", g_diveTotalMaxD);
+  v4Text(30, 110, buf, C(RGB_BLACK));
 
   uint32_t totMin = g_lifetimeUnderwaterSec / 60;
   uint32_t totH   = totMin / 60;
-  snprintf(buf, sizeof(buf), "累计水下  %luh%02lum", (unsigned long)totH, (unsigned long)(totMin % 60));
-  u8g2.drawUTF8(0, 46, buf);
+  snprintf(buf, sizeof(buf), "累计水下      %luh%02lum",
+           (unsigned long)totH, (unsigned long)(totMin % 60));
+  v4Text(30, 150, buf, C(RGB_BLACK));
 
-  // 距上次潜水时长 (水面间隔)
+  // 距上次潜水
   if (g_logCount > 0 && g_log[0].endEpoch > 0) {
     time_t nowEpoch;
     time(&nowEpoch);
     int32_t intervalSec = (int32_t)((uint32_t)nowEpoch - g_log[0].endEpoch);
     if (intervalSec >= 0 && intervalSec < 99 * 3600) {
-      snprintf(buf, sizeof(buf), "距上次潜水  %ldh%02ldm",
+      snprintf(buf, sizeof(buf), "距上次潜水    %ldh%02ldm",
                (long)(intervalSec / 3600), (long)((intervalSec / 60) % 60));
-      u8g2.drawUTF8(0, 58, buf);
+      v4Text(30, 190, buf, C(RGB_BLUE));
     }
   }
 
@@ -1432,38 +1475,41 @@ void settingsItemAdjust(uint8_t i, int delta) {
 }
 
 void drawSettings() {
-  tft.fillScreen(C(RGB_ORANGE)); u8g2.setBackgroundColor(C(RGB_ORANGE));
-  u8g2.setFont(FONT_CN);
-
-  // y=10 标题 + 当前项序号
   char buf[24];
-  u8g2.drawUTF8(0, 10, "设置");
   snprintf(buf, sizeof(buf), "%u/%u", g_settingsItem + 1, SETTINGS_COUNT);
-  int w = u8g2.getUTF8Width(buf);
-  u8g2.drawUTF8(126 - w, 10, buf);
-  drawDivider();
+  v4DrawHeader("设置", buf);
+  v4DrawFooter("MODE切项 UP/DOWN改 长按MODE保存");
 
-  // y=22/34/46/58 (4 项可见, 12px 间距, 不重叠)
-  const int VISIBLE = 4;
+  // 6 项可见, 每项 25px 行高 (y=50,75,100,125,150,175)
+  const int VISIBLE = 6;
   int first = 0;
   if (g_settingsItem >= VISIBLE) first = g_settingsItem - VISIBLE + 1;
   if (first > SETTINGS_COUNT - VISIBLE) first = SETTINGS_COUNT - VISIBLE;
   if (first < 0) first = 0;
 
+  // 局部清内容区
+  tft.fillRect(0, 36, 320, 170, C(RGB_ORANGE));
+
   for (int i = 0; i < VISIBLE && first + i < SETTINGS_COUNT; i++) {
     uint8_t idx = first + i;
-    int y = 22 + i * 12;
-    if (idx == g_settingsItem) u8g2.drawUTF8(0, y, ">");
-    u8g2.drawUTF8(10, y, settingsItemName(idx));
-    char vbuf[20];
+    int y = 52 + i * 26;
+    bool sel = (idx == g_settingsItem);
+    if (sel) tft.fillRect(0, y - 18, 320, 22, C(RGB_DARK));
+    uint16_t fg = sel ? C(RGB_WHITE) : C(RGB_BLACK);
+    u8g2.setBackgroundColor(sel ? C(RGB_DARK) : C(RGB_ORANGE));
+    v4Text(sel ? 8 : 16, y, sel ? ">" : "  ", fg);
+    v4Text(30, y, settingsItemName(idx), fg);
+    char vbuf[24];
     settingsItemValue(idx, vbuf, sizeof(vbuf));
     int vw = u8g2.getUTF8Width(vbuf);
-    u8g2.drawUTF8(126 - vw, y, vbuf);
+    v4Text(310 - vw, y, vbuf, fg);
+    u8g2.setBackgroundColor(C(RGB_ORANGE));
   }
 
-  // 滚动指示器: 右侧 ^ / v 表示上下还有更多项 (x=118 留 4px 边距)
-  if (first > 0)                            u8g2.drawUTF8(118, 22, "^");
-  if (first + VISIBLE < SETTINGS_COUNT)     u8g2.drawUTF8(118, 58, "v");
+  // 滚动箭头
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  if (first > 0)                          u8g2.drawUTF8(305, 50,  "^");
+  if (first + VISIBLE < SETTINGS_COUNT)   u8g2.drawUTF8(305, 200, "v");
 }
 
 void drawSettingsAndSend() {
@@ -1471,58 +1517,78 @@ void drawSettingsAndSend() {
 }
 
 void drawTimeEdit() {
-  tft.fillScreen(C(RGB_ORANGE)); u8g2.setBackgroundColor(C(RGB_ORANGE));
-  u8g2.setFont(FONT_CN);
-  // y=10 标题 + MODE 提示
-  u8g2.drawUTF8(0, 10, "设置时间");
-  // 右对齐: "MODE OK" 7 字符 = 42px, x=82 -> 82-124 留 4px 边距
-  u8g2.drawUTF8(82, 10, "MODE OK");
-  drawDivider();
+  v4DrawHeader("设置时间", "MODE 保存");
+  v4DrawFooter("UP/DN 增减   MODE 切换字段");
 
-  // 大字时间 y=40 (logisoso24, 字符 16-40)
+  tft.fillRect(0, 36, 320, 174, C(RGB_ORANGE));
+
+  // 大字时间 居中 (logisoso50 50px)
   char buf[8];
-  u8g2.setFont(u8g2_font_logisoso24_tn);
+  u8g2.setFont(u8g2_font_logisoso50_tn);
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  u8g2.setBackgroundColor(C(RGB_ORANGE));
   snprintf(buf, sizeof(buf), "%02u:%02u", g_editHH, g_editMM);
   int w = u8g2.getUTF8Width(buf);
-  int x = (128 - w) / 2;
-  u8g2.drawStr(x, 40, buf);
+  int x = (320 - w) / 2;
+  u8g2.drawUTF8(x, 130, buf);
 
   // 下划线指示当前编辑字段
   int colonOffset = u8g2.getUTF8Width("00");
   int afterColon  = u8g2.getUTF8Width("00:");
   int hhX = x;
   int mmX = x + afterColon;
-  if (g_editField == 0) tft.drawFastHLine(hhX, 44, colonOffset, C(RGB_BLACK));
-  else                  tft.drawFastHLine(mmX, 44, colonOffset, C(RGB_BLACK));
+  // 下划线指示当前编辑字段 (画 4px 粗)
+  if (g_editField == 0) tft.fillRect(hhX, 135, colonOffset, 4, C(RGB_RED));
+  else                  tft.fillRect(mmX, 135, colonOffset, 4, C(RGB_RED));
 
-  // y=58 底部提示
-  u8g2.setFont(FONT_CN);
-  u8g2.drawUTF8(0, 58, "上下增减   MODE切换");
+  v4Text((320 - u8g2.getUTF8Width("当前编辑: 时 / 分")) / 2, 170,
+         g_editField == 0 ? "当前编辑: 时" : "当前编辑: 分", C(RGB_BLUE));
 }
 
 void drawSplash() {
-  tft.fillScreen(C(RGB_ORANGE)); u8g2.setBackgroundColor(C(RGB_ORANGE));
-  // y=22 大字标题 (logisoso24, 字符 0-22)
-  u8g2.setFont(u8g2_font_logisoso24_tn);
-  // logisoso 字体不支持中文, 标题用 wqy12 大些字代替
-  u8g2.setFont(FONT_CN);
-  u8g2.drawUTF8(0, 14, "潜水表 DiveWatch");
-  // y=28/40/52 副标题 + 水面 + 密度
-  char buf[40];
-  u8g2.drawUTF8(0, 28, "v3.2  ZHL-16C");
-  snprintf(buf, sizeof(buf), "水面: %.1f mbar", g_surfacePressure);
-  u8g2.drawUTF8(0, 42, buf);
-  snprintf(buf, sizeof(buf), "密度: %.0f kg/m3", g_fluidDensity);
-  u8g2.drawUTF8(0, 54, buf);
+  tft.fillScreen(C(RGB_ORANGE));
+
+  // 大字标题
+  u8g2.setFont(u8g2_font_logisoso26_tn);
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  u8g2.setBackgroundColor(C(RGB_ORANGE));
+  // 用中文字体显示
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+  u8g2.setForegroundColor(C(RGB_BLACK));
+
+  // 居中"潜水表"大标题
+  u8g2.drawUTF8(80, 70, "潜水表 DiveWatch");
+
+  // 版本/算法
+  u8g2.drawUTF8(80, 105, "v4.0  ZHL-16C  ST7789");
+
+  // 水面气压 + 密度
+  char buf[48];
+  snprintf(buf, sizeof(buf), "水面气压  %.1f mbar", g_surfacePressure);
+  u8g2.drawUTF8(50, 140, buf);
+  snprintf(buf, sizeof(buf), "水密度    %.0f kg/m3 (%s)",
+           g_fluidDensity, g_fluidDensity > 1010 ? "海水" : "淡水");
+  u8g2.drawUTF8(50, 165, buf);
+
+  // 底部水平线
+  tft.drawFastHLine(0, 200, 320, C(RGB_BLACK));
+  u8g2.drawUTF8(80, 220, "开机中, 请稍候...");
 }
 
 void drawError(const char *l1, const char *l2 = nullptr) {
-  tft.fillScreen(C(RGB_ORANGE)); u8g2.setBackgroundColor(C(RGB_ORANGE));
-  u8g2.setFont(FONT_CN);
-  // y=14 大字标题 + y=34 错误信息行
-  u8g2.drawUTF8(0, 14, "*** 错误 ***");
-  u8g2.drawUTF8(0, 34, l1);
-  if (l2) u8g2.drawUTF8(0, 50, l2);
+  tft.fillScreen(C(RGB_RED));   // 红色背景表示错误
+  u8g2.setBackgroundColor(C(RGB_RED));
+  u8g2.setForegroundColor(C(RGB_WHITE));
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+
+  u8g2.drawUTF8(100, 60, "*** 错误 ***");
+  if (l1) u8g2.drawUTF8(40, 110, l1);
+  if (l2) u8g2.drawUTF8(40, 140, l2);
+  u8g2.drawUTF8(40, 200, "检查接线后重启");
+
+  // 恢复默认背景给后续绘制
+  u8g2.setBackgroundColor(C(RGB_ORANGE));
+  u8g2.setForegroundColor(C(RGB_BLACK));
 }
 
 // 进入深度睡眠 (软关机): ~10μA 功耗
@@ -1534,7 +1600,6 @@ void enterDeepSleep() {
 
   // 显示"关机中"画面
   // tft.enableDisplay (no-op v4)
-  tft.fillScreen(C(RGB_ORANGE)); u8g2.setBackgroundColor(C(RGB_ORANGE));
   u8g2.setFont(FONT_CN);
   u8g2.drawUTF8(0, 16, "正在关机...");
   u8g2.drawUTF8(0, 36, "再次长按 MODE");
@@ -1578,68 +1643,75 @@ void verifyWakeOrSleepAgain() {
   // 按够 2 秒, 继续正常 setup
 }
 
-// 开机自检: I2C 设备 + 按钮 + 蜂鸣器
+// 开机自检: I2C 设备 + 按钮 + 蜂鸣器 (320x240 版)
 void runSelfTest() {
-  tft.fillScreen(C(RGB_ORANGE)); u8g2.setBackgroundColor(C(RGB_ORANGE));
-  u8g2.setFont(FONT_CN);
-  u8g2.drawUTF8(0, 12, "系统自检");
-  u8g2.drawUTF8(0, 28, "正在检测...");
+  tft.fillScreen(C(RGB_ORANGE));
+  u8g2.setBackgroundColor(C(RGB_ORANGE));
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
 
-  // 检查 OLED I2C (能跑到这一步说明 OLED OK)
+  // 大字标题
+  u8g2.drawUTF8(80, 50, "系统自检");
+  u8g2.drawUTF8(80, 80, "正在检测...");
+
+  // 检查 OLED I2C (能跑到这步说明 SPI 屏 OK, 但 MS5837 还要测 I2C)
   bool oledOK = true;
 
   // 检查 MS5837 0x76
   Wire.beginTransmission(0x76);
   bool ms5837OK = (Wire.endTransmission() == 0);
 
-  // 蜂鸣器响 1 声测试
+  // 蜂鸣器响 1 声
   digitalWrite(BUZZER_PIN, HIGH);
   delay(60);
   digitalWrite(BUZZER_PIN, LOW);
   bool buzzerTested = true;
 
-  // 按钮检查: 长按开机时按键仍可能按住; 抖动也可能瞬时 LOW
-  // 策略: 提示松开 + 等待至少 500ms 连续 HIGH 才算 OK (容忍弹簧抖动)
+  // 等待按键释放 (容忍开机长按 + 抖动)
   auto checkBtnStable = [](uint8_t pin, uint32_t timeoutMs) -> bool {
     unsigned long deadline = millis() + timeoutMs;
     unsigned long stableStart = millis();
     while (millis() < deadline) {
-      if (digitalRead(pin) == LOW) {
-        stableStart = millis();   // 检测到按下/抖动, 重置稳定计时
-      } else if (millis() - stableStart >= 500) {
-        return true;              // 连续 500ms HIGH = 真的释放
-      }
+      if (digitalRead(pin) == LOW) stableStart = millis();
+      else if (millis() - stableStart >= 500) return true;
       delay(20);
     }
     return false;
   };
 
-  // 显示"请松开按键"提示, 给用户最多 4 秒释放时间
-  tft.fillScreen(C(RGB_ORANGE)); u8g2.setBackgroundColor(C(RGB_ORANGE));
-  u8g2.drawUTF8(0, 12, "系统自检");
-  u8g2.drawUTF8(0, 28, "正在检测...");
-  u8g2.drawUTF8(0, 50, "请松开按键");
-
+  u8g2.drawUTF8(80, 130, "请松开按键");
   bool btnMOK = checkBtnStable(BTN_MODE_PIN, 4000);
   bool btnUOK = checkBtnStable(BTN_UP_PIN,   1000);
   bool btnDOK = checkBtnStable(BTN_DOWN_PIN, 1000);
   bool btnOK  = btnMOK && btnUOK && btnDOK;
 
-  // 显示自检结果
-  tft.fillScreen(C(RGB_ORANGE)); u8g2.setBackgroundColor(C(RGB_ORANGE));
-  u8g2.drawUTF8(0, 12, "系统自检结果");
+  // 自检结果页 (重画)
+  tft.fillScreen(C(RGB_ORANGE));
+  u8g2.drawUTF8(60, 35, "系统自检结果");
+  tft.drawFastHLine(40, 45, 240, C(RGB_BLACK));
+
   char buf[32];
-  snprintf(buf, sizeof(buf), "OLED       %s", oledOK ? "正常" : "异常");
-  u8g2.drawUTF8(0, 26, buf);
-  snprintf(buf, sizeof(buf), "MS5837     %s", ms5837OK ? "正常" : "异常");
-  u8g2.drawUTF8(0, 38, buf);
-  snprintf(buf, sizeof(buf), "键 M:%s U:%s D:%s",
-           btnMOK ? "OK" : "X",
-           btnUOK ? "OK" : "X",
-           btnDOK ? "OK" : "X");
-  u8g2.drawUTF8(0, 50, buf);
-  snprintf(buf, sizeof(buf), "蜂鸣器     %s", buzzerTested ? "已测试" : "异常");
-  u8g2.drawUTF8(0, 62, buf);
+  // 4 项, 每项 35px 行高
+  snprintf(buf, sizeof(buf), "TFT 显示       %s", oledOK ? "正常" : "异常");
+  u8g2.setForegroundColor(oledOK ? C(RGB_GREEN) : C(RGB_RED));
+  u8g2.drawUTF8(40, 80, buf);
+
+  snprintf(buf, sizeof(buf), "MS5837 传感器  %s", ms5837OK ? "正常" : "异常");
+  u8g2.setForegroundColor(ms5837OK ? C(RGB_GREEN) : C(RGB_RED));
+  u8g2.drawUTF8(40, 115, buf);
+
+  snprintf(buf, sizeof(buf), "按键 M:%s U:%s D:%s",
+           btnMOK ? "正常" : "异常",
+           btnUOK ? "正常" : "异常",
+           btnDOK ? "正常" : "异常");
+  u8g2.setForegroundColor(btnOK ? C(RGB_GREEN) : C(RGB_RED));
+  u8g2.drawUTF8(40, 150, buf);
+
+  snprintf(buf, sizeof(buf), "蜂鸣器         %s", buzzerTested ? "已测试" : "异常");
+  u8g2.setForegroundColor(C(RGB_GREEN));
+  u8g2.drawUTF8(40, 185, buf);
+
+  u8g2.setForegroundColor(C(RGB_BLACK));
   Serial.printf("[SELF-TEST] OLED=%d MS5837=%d BTN_M=%d BTN_U=%d BTN_D=%d\n",
                 oledOK, ms5837OK, btnMOK, btnUOK, btnDOK);
   delay(2000);
@@ -2016,13 +2088,16 @@ void loop() {
   static bool     prevSettings = false;
 
   bool pageChanged = (g_page != prevPage) || (g_editingTime != prevEdit) || (g_inSettings != prevSettings);
-  bool timeToRender = (now - lastRender > 200);
+  // HUD/编辑/设置 = 频繁更新; 其他静态页 = 仅切页 + 5s 慢刷
+  uint32_t renderInterval = (g_page == PAGE_HUD || g_editingTime || g_inSettings) ? 300 : 5000;
+  bool timeToRender = (now - lastRender > renderInterval);
 
   if (!g_screenOff && (pageChanged || timeToRender)) {
     lastRender = now;
     if (pageChanged) {
-      tft.fillScreen(C(RGB_ORANGE));   // 切页统一清屏
-      s_lastPage = 255;                // 强制 HUD 重画静态部分
+      tft.fillScreen(C(RGB_ORANGE));
+      s_lastPage = 255;
+      g_pageDirty = true;
       prevPage = g_page;
       prevEdit = g_editingTime;
       prevSettings = g_inSettings;
@@ -2046,6 +2121,7 @@ void loop() {
         case PAGE_STATS:    drawStats();    break;
       }
     }
+    g_pageDirty = false;
   }
 
   // ---- Periodic clock save (every 60s) ----
