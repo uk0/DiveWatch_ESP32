@@ -22,17 +22,27 @@
 #include <Adafruit_ST7789.h>
 #include <SPI.h>
 
+// === 引脚定义 ===
 #define TFT_CS    21    // D10
 #define TFT_DC    18    // D9
 #define TFT_RST   17    // D8
-// MOSI=38, SCK=48 用 ESP32-S3-Nano 默认硬件 SPI (HSPI)
+#define TFT_MOSI  38    // D11 (HSPI MOSI, 必须显式指定)
+#define TFT_SCK   48    // D13 (HSPI SCK)
 
-Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
+// ESP32-S3 必须自定义 SPI bus, 否则会用默认 GPIO 11/12 (跟 I2C 冲突)
+SPIClass mySPI(HSPI);
+
+Adafruit_ST7789 tft = Adafruit_ST7789(&mySPI, TFT_CS, TFT_DC, TFT_RST);
 
 void setup() {
   Serial.begin(115200);
   delay(200);
   Serial.println("\n[ST7789] init...");
+
+  // 用自定义 SPI 引脚 (顺序: SCK, MISO, MOSI, SS)
+  mySPI.begin(TFT_SCK, -1, TFT_MOSI, TFT_CS);
+  Serial.printf("[SPI] SCK=%d MOSI=%d (CS=%d DC=%d RST=%d)\n",
+                TFT_SCK, TFT_MOSI, TFT_CS, TFT_DC, TFT_RST);
 
   tft.init(240, 320);                  // 分辨率 240×320
   tft.setRotation(0);                   // 0/1/2/3 旋转 (0=竖屏)
