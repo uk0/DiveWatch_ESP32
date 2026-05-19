@@ -1076,74 +1076,57 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
   uint8_t stat = hudCalcStat(depth, ndl, ascentMpm);
 
   // ===== 顶栏 =====
-  // 状态徽章 (默认黑底白字, 警告时红底白字)
-  if (stat != s_lastStat) {
-    s_lastStat = stat;
-    uint16_t bg = (stat == ST_ALARM) ? C(RGB_RED) : C(RGB_DARK);
-    const char *t = (stat == ST_OK) ? "OK" : (stat == ST_WARN) ? "!" : "X";
-    tft.fillRect(2, 4, 28, 20, C(RGB_BLACK));
-    drawBadge(3, 6, 26, 16, bg, C(RGB_WHITE), t, u8g2_font_wqy13_t_gb2312);
-  }
-
-  // 时间
+  // ===== 顶栏 极简: 黑底白字 + 仅警告红 (无徽章/图标/色块) =====
+  // 布局: [时间]  [模式 用时]  [AIR]  [电量%]  [海/淡]
   uint8_t hh, mm, ss; getCurrentTime(hh, mm, ss);
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+  u8g2.setBackgroundColor(C(RGB_BLACK));
+
+  // 时间 (左)
   snprintf(buf, sizeof(buf), "%02u:%02u", hh, mm);
   if (strcmp(buf, s_lastTime) != 0) {
     strcpy(s_lastTime, buf);
-    tft.fillRect(34, 4, 50, 22, C(RGB_BLACK));
-    u8g2.setFont(u8g2_font_wqy16_t_gb2312);
-    u8g2.setBackgroundColor(C(RGB_BLACK));
+    tft.fillRect(0, 0, 60, 28, C(RGB_BLACK));
     u8g2.setForegroundColor(C(RGB_WHITE));
-    u8g2.drawUTF8(36, 22, buf);
+    u8g2.drawUTF8(6, 21, buf);
   }
 
-  // 模式徽章 + 用时 (DIVE 绿底 / 水面 灰底; 用时随时间变化, 每帧重画)
-  bool divingChanged = (g_diving != s_lastDiving);
-  if (divingChanged) {
-    s_lastDiving = g_diving;
-    tft.fillRect(86, 4, 100, 22, C(RGB_BLACK));
-    // 模式徽章: 都用黑底白字, DIVE 加红字突出
-    if (g_diving) {
-      drawBadge(88, 6, 40, 16, C(RGB_DARK), C(RGB_RED), "DIVE", u8g2_font_wqy13_t_gb2312);
-    } else {
-      drawBadge(88, 6, 42, 16, C(RGB_DARK), C(RGB_WHITE), "水面", u8g2_font_wqy13_t_gb2312);
-    }
-  }
+  // 模式 + 用时 (中, 持续变化每帧重画)
+  tft.fillRect(62, 0, 130, 28, C(RGB_BLACK));
   if (g_diving) {
-    tft.fillRect(132, 4, 52, 22, C(RGB_BLACK));
-    snprintf(buf, sizeof(buf), "%lu:%02lu",
+    // DIVE 状态: 红字突出 (生命安全相关)
+    snprintf(buf, sizeof(buf), "DIVE %lu:%02lu",
              (unsigned long)(diveSec/60), (unsigned long)(diveSec%60));
-    u8g2.setFont(u8g2_font_wqy16_t_gb2312);
-    u8g2.setBackgroundColor(C(RGB_BLACK));
+    u8g2.setForegroundColor(C(RGB_RED));
+  } else {
+    strcpy(buf, "水面");
     u8g2.setForegroundColor(C(RGB_WHITE));
-    u8g2.drawUTF8(134, 22, buf);
   }
+  u8g2.drawUTF8(66, 21, buf);
 
-  // AIR 标签 (简洁白字, 无背景徽章)
-  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
-  u8g2.setBackgroundColor(C(RGB_BLACK));
+  // AIR (右-1) — 白字
   u8g2.setForegroundColor(C(RGB_WHITE));
-  u8g2.drawUTF8(195, 20, "AIR");
+  u8g2.drawUTF8(196, 21, "AIR");
 
-  // 电池图标 + %
+  // 电量 % (右-2) — 仅 <20% 红, 否则白
   if (g_batPct != s_lastBatPct) {
     s_lastBatPct = g_batPct;
-    tft.fillRect(225, 4, 65, 22, C(RGB_BLACK));
-    drawBatIcon(227, 9, g_batPct, C(RGB_BLACK));
+    tft.fillRect(226, 0, 56, 28, C(RGB_BLACK));
     snprintf(buf, sizeof(buf), "%d%%", g_batPct);
-    u8g2.setBackgroundColor(C(RGB_BLACK));
     u8g2.setForegroundColor(g_batPct < 20 ? C(RGB_RED) : C(RGB_WHITE));
-    u8g2.drawUTF8(252, 21, buf);
+    u8g2.drawUTF8(230, 21, buf);
   }
 
-  // 海/淡 (简洁白字, 无背景)
+  // 海/淡 (右) — 白字
   int8_t curFluid = (g_fluidDensity > 1010) ? 1 : 0;
   if (curFluid != s_lastFluid) {
     s_lastFluid = curFluid;
-    tft.fillRect(289, 4, 28, 22, C(RGB_BLACK));
+    tft.fillRect(284, 0, 36, 28, C(RGB_BLACK));
     u8g2.setForegroundColor(C(RGB_WHITE));
-    u8g2.drawUTF8(294, 20, curFluid ? "海" : "淡");
+    u8g2.drawUTF8(290, 21, curFluid ? "海" : "淡");
   }
+  // s_lastStat 不再使用但保留缓存变量避免编译警告
+  (void)stat;
 
   // ===== 主区 (橘黄底, 纯黑文字, 无阴影) =====
   u8g2.setBackgroundColor(C(RGB_ORANGE));
