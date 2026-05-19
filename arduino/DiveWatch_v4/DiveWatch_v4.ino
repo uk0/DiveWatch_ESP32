@@ -889,10 +889,9 @@ static void drawBadge(int x, int y, int w, int h, uint16_t bg, uint16_t fg, cons
   u8g2.drawUTF8(x + (w - tw) / 2, y + h - 4, text);
 }
 
-// 电池图标 (含百分比填充)
+// 电池图标 (橙+黑+红: 危险=红, 正常=白)
 static void drawBatIcon(int x, int y, int pct, uint16_t bgFill) {
-  uint16_t fg = (pct < 20) ? C(RGB_RED)
-              : (pct < 40) ? C(RGB_YELLOW) : C(RGB_GREEN);
+  uint16_t fg = (pct < 20) ? C(RGB_RED) : C(RGB_WHITE);
   tft.drawRect(x, y, 18, 10, C(RGB_WHITE));
   tft.fillRect(x + 18, y + 3, 2, 4, C(RGB_WHITE));
   tft.fillRect(x + 1, y + 1, 16, 8, bgFill);
@@ -900,11 +899,9 @@ static void drawBatIcon(int x, int y, int pct, uint16_t bgFill) {
   if (fillW > 0) tft.fillRect(x + 1, y + 1, fillW, 8, fg);
 }
 
-// 18-dot NDL 圆环 (简化, 无白边)
+// 18-dot NDL 圆环 (橙+黑+红: 危险=红, 其余=黑)
 static void drawNdlRing(int cx, int cy, int r, float ndlMin) {
-  uint16_t fg = C(RGB_GREEN);
-  if (ndlMin < 5)        fg = C(RGB_RED);
-  else if (ndlMin < 20)  fg = C(RGB_YELLOW);
+  uint16_t fg = (ndlMin < 5) ? C(RGB_RED) : C(RGB_BLACK);
   float pct = ndlMin / 99.0f;
   if (pct < 0) pct = 0;
   if (pct > 1) pct = 1;
@@ -919,18 +916,16 @@ static void drawNdlRing(int cx, int cy, int r, float ndlMin) {
   }
 }
 
-// 上升速度彩条 (Garmin 风格: 色带 + 三角指针 + 刻度)
+// 上升速度条 (橙+黑+红: 安全=黑, 警告=红)
 static void drawAscentBar(int x, int y, int w, int h, float mpm) {
   tft.fillRect(x - 8, y - 8, w + 16, h + 10, C(RGB_ORANGE));
   int mid = x + w / 2;
   int halfW = w / 2 - 1;
-  int wG = (int)(6.0f / 18.0f * halfW);
-  int wY = (int)(9.0f / 18.0f * halfW);
+  int wY = (int)(9.0f / 18.0f * halfW);   // 9 m/min 警告阈值
+  // 内部 0~9 m/min: 黑色; 外侧 9~18 m/min: 红色
   tft.fillRect(x + 1,              y + 1, halfW - wY, h - 2, C(RGB_RED));
-  tft.fillRect(x + halfW - wY + 1, y + 1, wY - wG,    h - 2, C(RGB_YELLOW));
-  tft.fillRect(x + halfW - wG + 1, y + 1, wG,         h - 2, C(RGB_GREEN));
-  tft.fillRect(mid + 1,         y + 1, wG,         h - 2, C(RGB_GREEN));
-  tft.fillRect(mid + 1 + wG,    y + 1, wY - wG,    h - 2, C(RGB_YELLOW));
+  tft.fillRect(x + halfW - wY + 1, y + 1, wY,          h - 2, C(RGB_BLACK));
+  tft.fillRect(mid + 1,         y + 1, wY,         h - 2, C(RGB_BLACK));
   tft.fillRect(mid + 1 + wY,    y + 1, halfW - wY, h - 2, C(RGB_RED));
   tft.drawRect(x, y, w, h, C(RGB_BLACK));
   tft.drawFastVLine(mid, y - 2, h + 4, C(RGB_BLACK));
@@ -956,7 +951,7 @@ static void drawTopHeader(const char *title, const char *right = nullptr) {
   u8g2.drawUTF8(8, 21, title);
   if (right) {
     int w = u8g2.getUTF8Width(right);
-    u8g2.setForegroundColor(C(RGB_CYAN));
+    u8g2.setForegroundColor(C(RGB_BLACK));
     u8g2.drawUTF8(315 - w, 21, right);
   }
   u8g2.setBackgroundColor(C(RGB_ORANGE));
@@ -999,7 +994,7 @@ static void drawTankIcon(int x, int y, int w, int h, int pct) {
   int innerH = h - rTop - 2 * inset;
   if (innerH < 0) innerH = 0;
   int fillH = innerH * pct / 100;
-  uint16_t col = (pct < 25) ? C(RGB_RED) : (pct < 50) ? C(RGB_YELLOW) : C(RGB_GREEN);
+  uint16_t col = (pct < 25) ? C(RGB_RED) : C(RGB_BLACK);
   if (fillH > 0) {
     tft.fillRect(x + inset, y + h - inset - fillH, innerW, fillH, col);
   }
@@ -1081,14 +1076,13 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
   uint8_t stat = hudCalcStat(depth, ndl, ascentMpm);
 
   // ===== 顶栏 =====
-  // 状态徽章 (圆角彩色 OK/!/X)
+  // 状态徽章 (默认黑底白字, 警告时红底白字)
   if (stat != s_lastStat) {
     s_lastStat = stat;
-    uint16_t bg = (stat == ST_OK) ? C(RGB_GREEN)
-                : (stat == ST_WARN) ? C(RGB_YELLOW) : C(RGB_RED);
+    uint16_t bg = (stat == ST_ALARM) ? C(RGB_RED) : C(RGB_DARK);
     const char *t = (stat == ST_OK) ? "OK" : (stat == ST_WARN) ? "!" : "X";
     tft.fillRect(2, 4, 28, 20, C(RGB_BLACK));
-    drawBadge(3, 6, 26, 16, bg, C(RGB_BLACK), t, u8g2_font_wqy13_t_gb2312);
+    drawBadge(3, 6, 26, 16, bg, C(RGB_WHITE), t, u8g2_font_wqy13_t_gb2312);
   }
 
   // 时间
@@ -1108,10 +1102,11 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
   if (divingChanged) {
     s_lastDiving = g_diving;
     tft.fillRect(86, 4, 100, 22, C(RGB_BLACK));
+    // 模式徽章: 都用黑底白字, DIVE 加红字突出
     if (g_diving) {
-      drawBadge(88, 6, 40, 16, C(RGB_GREEN), C(RGB_BLACK), "DIVE", u8g2_font_wqy13_t_gb2312);
+      drawBadge(88, 6, 40, 16, C(RGB_DARK), C(RGB_RED), "DIVE", u8g2_font_wqy13_t_gb2312);
     } else {
-      drawBadge(88, 6, 42, 16, C(RGB_DARK), C(RGB_CYAN), "水面", u8g2_font_wqy13_t_gb2312);
+      drawBadge(88, 6, 42, 16, C(RGB_DARK), C(RGB_WHITE), "水面", u8g2_font_wqy13_t_gb2312);
     }
   }
   if (g_diving) {
@@ -1209,7 +1204,7 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
     snprintf(buf, sizeof(buf), "安停 %lus", (unsigned long)(remain/1000));
     drawBadge(160, 136, 150, 24, C(RGB_RED), C(RGB_WHITE), buf, u8g2_font_wqy16_t_gb2312);
   } else if (g_ss == SS_DONE) {
-    drawBadge(160, 136, 150, 24, C(RGB_GREEN), C(RGB_BLACK), "安停完成", u8g2_font_wqy16_t_gb2312);
+    drawBadge(160, 136, 150, 24, C(RGB_DARK), C(RGB_WHITE), "安停完成", u8g2_font_wqy16_t_gb2312);
   } else if (decoAlarm) {
     drawBadge(160, 136, 150, 24, C(RGB_RED), C(RGB_WHITE), "需要减压!", u8g2_font_wqy16_t_gb2312);
   }
@@ -1249,7 +1244,7 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
     s_lastTemp = temp;
     tft.fillRect(108, 190, 50, 22, C(RGB_ORANGE));
     snprintf(buf, sizeof(buf), "%.1f°", temp);
-    u8g2.setForegroundColor(temp < g_lowTempC ? C(RGB_BLUE) : C(RGB_BLACK));
+    u8g2.setForegroundColor(C(RGB_BLACK));
     u8g2.drawUTF8(110, 208, buf);
   }
   // N2 (列3: x=160..240, 标签 x=166, 数值 x=190)
@@ -1259,7 +1254,7 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
     tft.fillRect(188, 190, 50, 22, C(RGB_ORANGE));
     snprintf(buf, sizeof(buf), "%.0f%%", n2Pct);
     u8g2.setForegroundColor(n2Pct > 80 ? C(RGB_RED)
-                            : (n2Pct > 60 ? C(RGB_BLUE) : C(RGB_BLACK)));
+                            : C(RGB_BLACK));
     u8g2.drawUTF8(190, 208, buf);
   }
   // 用时 (列4: x=240..320, 标签 x=246, 数值 x=276)
@@ -1300,7 +1295,8 @@ void drawProfile(float depth) {
   int ySS2 = y0 + 2 + (int)(SS_WINDOW_MAX / yMax * (gh - 4));
   if (ySS1 < y0 + 2)      ySS1 = y0 + 2;
   if (ySS2 > y0 + gh - 2) ySS2 = y0 + gh - 2;
-  if (ySS2 > ySS1) tft.fillRect(x0 + 1, ySS1, gw - 2, ySS2 - ySS1, 0x0320);
+  // 安停窗口区: 用橙底高亮 (在 DARK 绘图区上突出安停目标深度)
+  if (ySS2 > ySS1) tft.fillRect(x0 + 1, ySS1, gw - 2, ySS2 - ySS1, C(RGB_ORANGE));
 
   // Y 轴刻度
   u8g2.setFont(u8g2_font_wqy12_t_gb2312);
@@ -1334,13 +1330,13 @@ void drawProfile(float depth) {
       int xp = x0 + 2 + i * (gw - 4) / denom;
       int yp = y0 + 2 + (int)(d / yMax * (gh - 4));
       if (prevX >= 0) {
-        tft.drawLine(prevX, prevY, xp, yp, C(RGB_CYAN));
-        tft.drawLine(prevX, prevY + 1, xp, yp + 1, C(RGB_CYAN));
+        tft.drawLine(prevX, prevY, xp, yp, C(RGB_BLACK));
+        tft.drawLine(prevX, prevY + 1, xp, yp + 1, C(RGB_BLACK));
       }
       prevX = xp; prevY = yp;
     }
     if (prevX >= 0) {
-      tft.fillCircle(prevX, prevY, 4, C(RGB_YELLOW));
+      tft.fillCircle(prevX, prevY, 4, C(RGB_RED));
       tft.drawCircle(prevX, prevY, 4, C(RGB_RED));
     }
   } else if (g_profileCount == 0) {
@@ -1369,7 +1365,7 @@ void drawProfile(float depth) {
     u8g2.setForegroundColor(C(RGB_RED));
     u8g2.drawUTF8(140, 210, buf);
   } else if (g_ss == SS_DONE) {
-    u8g2.setForegroundColor(C(RGB_GREEN));
+    u8g2.setForegroundColor(C(RGB_BLACK));
     u8g2.drawUTF8(140, 210, "安停完成");
   }
   // 右侧采样信息
@@ -1397,7 +1393,7 @@ void drawTissue(float depth) {
     if (p < 0.0f) p = 0.0f;
     int h = (int)(p * hMax);
     int x = x0 + i * (barW + gap);
-    uint16_t fill = (p > 0.8f) ? C(RGB_RED) : (p > 0.6f) ? C(RGB_BLUE) : C(RGB_BLACK);
+    uint16_t fill = (p > 0.8f) ? C(RGB_RED) : C(RGB_BLACK);
     tft.drawRect(x, yTop, barW, hMax, C(RGB_BLACK));
     tft.fillRect(x, yTop + (hMax - h), barW, h, fill);
   }
@@ -1405,7 +1401,7 @@ void drawTissue(float depth) {
   // 底部 NDL
   float ndl = computeNDL(depth);
   uint16_t color = C(RGB_BLACK);
-  if (ndl >= 99.0f)      snprintf(buf, sizeof(buf), "NDL  >99 分"), color = C(RGB_GREEN);
+  if (ndl >= 99.0f)      snprintf(buf, sizeof(buf), "NDL  >99 分"), color = C(RGB_BLACK);
   else if (ndl <= 0.0f)  snprintf(buf, sizeof(buf), "需要减压"), color = C(RGB_RED);
   else                   snprintf(buf, sizeof(buf), "NDL  %.0f 分钟", ndl), color = (ndl < 5) ? C(RGB_RED) : C(RGB_BLACK);
   v4Text(10, 195, buf, color);
@@ -1452,8 +1448,8 @@ void drawLastDive() {
     int barX = 30, barY = 122, barW = 260, barH = 14;
     tft.fillRect(barX, barY, barW, barH, C(RGB_DARK));
     int avgW = (int)(barW * r.avgDepth / r.maxDepth);
-    tft.fillRect(barX, barY, avgW, barH, C(RGB_BLUE));
-    tft.fillRect(barX + avgW, barY, barW - avgW, barH, C(RGB_GREEN));
+    tft.fillRect(barX, barY, avgW, barH, C(RGB_DARK));
+    tft.fillRect(barX + avgW, barY, barW - avgW, barH, C(RGB_BLACK));
     tft.drawRect(barX, barY, barW, barH, C(RGB_BLACK));
     // 标签
     u8g2.setFont(u8g2_font_wqy12_t_gb2312);
@@ -1484,7 +1480,7 @@ void drawLastDive() {
   u8g2.drawUTF8(86, 180, buf);
   // 最低温
   snprintf(buf, sizeof(buf), "%.1f°", r.minTemp);
-  u8g2.setForegroundColor(r.minTemp < g_lowTempC ? C(RGB_BLUE) : C(RGB_BLACK));
+  u8g2.setForegroundColor(C(RGB_BLACK));
   u8g2.drawUTF8(166, 180, buf);
   // 电池
   if (r.batVoltage > 0.1f) snprintf(buf, sizeof(buf), "%.2fV", r.batVoltage);
@@ -1508,7 +1504,7 @@ void drawLastDive() {
     if (intervalSec >= 0 && intervalSec < 99 * 3600) {
       snprintf(buf, sizeof(buf), "距今 %ldh%02ldm",
                (long)(intervalSec / 3600), (long)((intervalSec / 60) % 60));
-      u8g2.setForegroundColor(C(RGB_BLUE));
+      u8g2.setForegroundColor(C(RGB_BLACK));
       u8g2.drawUTF8(180, 207, buf);
     }
   }
@@ -1577,7 +1573,7 @@ void drawLogList() {
     if (intervalSec >= 0 && intervalSec < 99 * 3600) {
       snprintf(buf, sizeof(buf), "距今 %ldh%02ldm",
                (long)(intervalSec / 3600), (long)((intervalSec / 60) % 60));
-      u8g2.setForegroundColor(C(RGB_BLUE));
+      u8g2.setForegroundColor(C(RGB_BLACK));
       u8g2.drawUTF8(180, 124, buf);
     }
   }
@@ -1594,7 +1590,7 @@ void drawLogList() {
   u8g2.drawUTF8(246, 154, "总潜次");
 
   u8g2.setFont(u8g2_font_wqy16_t_gb2312);
-  u8g2.setForegroundColor(r.minTemp < g_lowTempC ? C(RGB_BLUE) : C(RGB_BLACK));
+  u8g2.setForegroundColor(C(RGB_BLACK));
   snprintf(buf, sizeof(buf), "%.1f°", r.minTemp);
   u8g2.drawUTF8(8, 180, buf);
   u8g2.setForegroundColor(C(RGB_BLACK));
@@ -1638,11 +1634,11 @@ void drawAir() {
   drawTankIcon(12, 38, 44, 140, pct);
 
   // ===== 右上: SPG 百分比圆环 (cx=260 cy=82 r=42) =====
-  drawPercentRing(260, 82, 42, pct / 100.0f, C(RGB_RED), C(RGB_YELLOW), C(RGB_GREEN));
+  drawPercentRing(260, 82, 42, pct / 100.0f, C(RGB_RED), C(RGB_BLACK), C(RGB_BLACK));
   // 环内百分比数字
   u8g2.setFont(u8g2_font_wqy16_t_gb2312);
   u8g2.setBackgroundColor(C(RGB_ORANGE));
-  uint16_t pCol = (pct < 25) ? C(RGB_RED) : (pct < 50) ? C(RGB_YELLOW) : C(RGB_GREEN);
+  uint16_t pCol = (pct < 25) ? C(RGB_RED) : C(RGB_BLACK);
   snprintf(buf, sizeof(buf), "%d%%", pct);
   int wn = u8g2.getUTF8Width(buf);
   u8g2.setForegroundColor(C(RGB_BLACK));
@@ -1734,11 +1730,11 @@ void drawN2() {
   drawBottomButtonBar("翻页", "--", "--");
 
   float loadPct = computeTissueLoadPct(g_depthSmooth);
-  uint16_t loadCol = (loadPct < 60) ? C(RGB_GREEN) : (loadPct < 80) ? C(RGB_BLACK) : C(RGB_RED);
+  uint16_t loadCol = (loadPct >= 80) ? C(RGB_RED) : C(RGB_BLACK);
   const char *risk = (loadPct < 60) ? "低风险" : (loadPct < 80) ? "中风险" : "高风险";
 
   // ===== 左侧: 圆环 + 中央百分比 =====
-  drawPercentRing(80, 95, 50, loadPct / 100.0f, C(RGB_GREEN), C(RGB_BLACK), C(RGB_RED));
+  drawPercentRing(80, 95, 50, loadPct / 100.0f, C(RGB_BLACK), C(RGB_BLACK), C(RGB_RED));
   // 中央大字百分比
   u8g2.setFont(u8g2_font_logisoso28_tn);
   u8g2.setBackgroundColor(C(RGB_ORANGE));
@@ -1778,7 +1774,7 @@ void drawN2() {
   // 禁飞
   float noFlyH = computeNoFlyTimeHours();
   if (noFlyH < 0.05f) {
-    u8g2.setForegroundColor(C(RGB_GREEN));
+    u8g2.setForegroundColor(C(RGB_BLACK));
     u8g2.drawUTF8(8, 185, "可飞行");
   } else if (noFlyH < 100.0f) {
     snprintf(buf, sizeof(buf), "%dh %02dm",
@@ -1792,7 +1788,7 @@ void drawN2() {
   // 脱饱和
   float desatH = computeFullDesaturationHours();
   if (desatH < 0.05f) {
-    u8g2.setForegroundColor(C(RGB_GREEN));
+    u8g2.setForegroundColor(C(RGB_BLACK));
     u8g2.drawUTF8(168, 185, "已完成");
   } else if (desatH < 100.0f) {
     snprintf(buf, sizeof(buf), "%.0f 小时", desatH);
@@ -1833,7 +1829,7 @@ void drawPlan() {
   float ndl = computeNDL((float)g_planDepthM);
   uint16_t ndlCol;
   const char *ndlTxt;
-  if (ndl >= 99.0f)        { ndlTxt = ">99 分"; ndlCol = C(RGB_GREEN); }
+  if (ndl >= 99.0f)        { ndlTxt = ">99 分"; ndlCol = C(RGB_BLACK); }
   else if (ndl <= 0.0f)    { ndlTxt = "需减压"; ndlCol = C(RGB_RED);   }
   else if (ndl < 5)        { static char tb[16]; snprintf(tb, sizeof(tb), "%.0f分", ndl); ndlTxt = tb; ndlCol = C(RGB_RED); }
   else                     { static char tb[16]; snprintf(tb, sizeof(tb), "%.0f分", ndl); ndlTxt = tb; ndlCol = C(RGB_BLACK); }
@@ -1919,8 +1915,8 @@ void drawTempChart() {
     int x2 = x0 + 2 + (i + 1) * (gw - 4) / (g_tempHistCount - 1);
     int y1 = y0 + gh - 4 - (int)((g_tempHist[idx1] - minT) * (gh - 8) / (maxT - minT));
     int y2 = y0 + gh - 4 - (int)((g_tempHist[idx2] - minT) * (gh - 8) / (maxT - minT));
-    tft.drawLine(x1, y1, x2, y2, C(RGB_BLUE));
-    tft.drawLine(x1, y1 + 1, x2, y2 + 1, C(RGB_BLUE));  // 加粗
+    tft.drawLine(x1, y1, x2, y2, C(RGB_BLACK));
+    tft.drawLine(x1, y1 + 1, x2, y2 + 1, C(RGB_BLACK));  // 加粗
   }
 }
 
@@ -1986,8 +1982,8 @@ void drawBatHist() {
     int x2 = x0 + 2 + (i + 1) * (gw - 4) / (g_batHistCount - 1);
     int y1 = y0 + gh - 4 - (int)((g_batHist[idx1] - minV) * (gh - 8) / (maxV - minV));
     int y2 = y0 + gh - 4 - (int)((g_batHist[idx2] - minV) * (gh - 8) / (maxV - minV));
-    tft.drawLine(x1, y1, x2, y2, C(RGB_GREEN));
-    tft.drawLine(x1, y1 + 1, x2, y2 + 1, C(RGB_GREEN));
+    tft.drawLine(x1, y1, x2, y2, C(RGB_BLACK));
+    tft.drawLine(x1, y1 + 1, x2, y2 + 1, C(RGB_BLACK));
   }
 
 }
@@ -2071,7 +2067,7 @@ void drawStats() {
       } else {
         snprintf(buf, sizeof(buf), "距上次  %ld 天", (long)(intervalSec / 86400));
       }
-      u8g2.setForegroundColor(C(RGB_BLUE));
+      u8g2.setForegroundColor(C(RGB_BLACK));
       u8g2.drawUTF8(20, 152, buf);
     }
   }
@@ -2458,22 +2454,22 @@ void runSelfTest() {
   char buf[32];
   // 4 项, 每项 35px 行高
   snprintf(buf, sizeof(buf), "TFT 显示       %s", oledOK ? "正常" : "异常");
-  u8g2.setForegroundColor(oledOK ? C(RGB_GREEN) : C(RGB_RED));
+  u8g2.setForegroundColor(oledOK ? C(RGB_WHITE) : C(RGB_RED));
   u8g2.drawUTF8(40, 80, buf);
 
   snprintf(buf, sizeof(buf), "MS5837 传感器  %s", ms5837OK ? "正常" : "异常");
-  u8g2.setForegroundColor(ms5837OK ? C(RGB_GREEN) : C(RGB_RED));
+  u8g2.setForegroundColor(ms5837OK ? C(RGB_WHITE) : C(RGB_RED));
   u8g2.drawUTF8(40, 115, buf);
 
   snprintf(buf, sizeof(buf), "按键 M:%s U:%s D:%s",
            btnMOK ? "正常" : "异常",
            btnUOK ? "正常" : "异常",
            btnDOK ? "正常" : "异常");
-  u8g2.setForegroundColor(btnOK ? C(RGB_GREEN) : C(RGB_RED));
+  u8g2.setForegroundColor(btnOK ? C(RGB_WHITE) : C(RGB_RED));
   u8g2.drawUTF8(40, 150, buf);
 
   snprintf(buf, sizeof(buf), "蜂鸣器         %s", buzzerTested ? "已测试" : "异常");
-  u8g2.setForegroundColor(C(RGB_GREEN));
+  u8g2.setForegroundColor(C(RGB_BLACK));
   u8g2.drawUTF8(40, 185, buf);
 
   u8g2.setForegroundColor(C(RGB_BLACK));
