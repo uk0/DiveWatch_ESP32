@@ -368,38 +368,95 @@ float computeFullDesaturationHours() {
 }
 
 // ================== Safety stop state ================================
+// 标准 AOW 规范 (PADI / Garmin / Suunto 风格):
+//   - 窗口: 2.5 - 6.0 m (主推荐 5 m, 进入即开始)
+//   - 触发: 本次下潜达 10 m 即建议安全停留
+//   - 累积计时: 用 delta 累加, 抖动 / 短暂出窗口仅暂停, 不重置
+//   - 抖动容差: 出窗口 30 s 内仍保持 RUNNING (累计暂停)
+//   - 放弃: 深度 > 7.5 m 持续 30 s -> 回到 ARMED 等再次进窗
+//   - 重置: 浮出水面 (< 1 m) 持续 60 s -> SS_IDLE, accum=0
+#define SS_WINDOW_MIN     2.5f
+#define SS_WINDOW_MAX     6.0f
+#define SS_ABORT_DEPTH    7.5f
+#define SS_SURFACE_RESET  1.0f
+#define SS_SURFACE_MS     60000U
+#define SS_DEEP_TRIGGER   10.0f
+#define SS_GRACE_MS       30000U     // 出窗口容差 (抖动保护)
+
 enum SSState : uint8_t { SS_IDLE = 0, SS_ARMED, SS_RUNNING, SS_DONE };
 SSState  g_ss          = SS_IDLE;
-uint32_t g_ssEnterMs   = 0;
 uint32_t g_ssAccumMs   = 0;
-
-// Arm when the diver has been below 10 m at some point during this dive.
-bool g_ssArmCondition = false;
+uint32_t g_ssTickMs    = 0;          // 上次 inBand 累加时刻 (用于 delta)
+uint32_t g_ssOutBandMs = 0;          // 出窗口起始时刻 (用于 grace)
+uint32_t g_ssSurfaceMs = 0;          // 浮水面起始时刻 (用于重置)
+bool     g_ssArmCondition = false;   // 本次潜水曾 >10m
 
 void updateSafetyStop(float depth_m, uint32_t now) {
-  if (!g_diving) { g_ss = SS_IDLE; g_ssAccumMs = 0; g_ssArmCondition = false; return; }
-  // 任何超过 5m 的下潜都触发安全停留(更符合"每潜建议安全停留"标准)
-  if (depth_m > 5.0f) g_ssArmCondition = true;
+  // 浮出水面持续 60 s -> 重置
+  if (depth_m < SS_SURFACE_RESET) {
+    if (g_ssSurfaceMs == 0) g_ssSurfaceMs = now;
+    if (now - g_ssSurfaceMs > SS_SURFACE_MS) {
+      g_ss = SS_IDLE;
+      g_ssAccumMs = 0;
+      g_ssArmCondition = false;
+      g_ssTickMs = 0;
+      g_ssOutBandMs = 0;
+    }
+  } else {
+    g_ssSurfaceMs = 0;
+  }
+
+  if (!g_diving) { g_ssTickMs = 0; return; }
+
+  // ARM 条件: 本次下潜达 SS_DEEP_TRIGGER
+  if (depth_m > SS_DEEP_TRIGGER) g_ssArmCondition = true;
   if (!g_ssArmCondition) return;
 
-  bool inBand = fabsf(depth_m - SAFETY_STOP_DEPTH) <= SAFETY_STOP_BAND;
+  bool inBand  = (depth_m >= SS_WINDOW_MIN && depth_m <= SS_WINDOW_MAX);
+  bool tooDeep = (depth_m > SS_ABORT_DEPTH);
+
   switch (g_ss) {
     case SS_IDLE:
-      if (depth_m < SAFETY_STOP_DEPTH + SAFETY_STOP_BAND) g_ss = SS_ARMED;
+      if (depth_m <= SS_WINDOW_MAX + 1.5f && !tooDeep) g_ss = SS_ARMED;
       break;
+
     case SS_ARMED:
-      if (inBand) { g_ss = SS_RUNNING; g_ssEnterMs = now; }
-      break;
-    case SS_RUNNING:
       if (inBand) {
-        g_ssAccumMs = now - g_ssEnterMs;
-        if (g_ssAccumMs >= g_safetyStopSec * 1000UL) g_ss = SS_DONE;
-      } else {
-        g_ss = SS_ARMED;     // left band, will resume when re-enters
-        g_ssEnterMs = now;
+        g_ss = SS_RUNNING;
+        g_ssTickMs = now;
+        g_ssOutBandMs = 0;
+      } else if (tooDeep) {
+        g_ss = SS_IDLE;          // 重新下潜, 等再次接近窗口
       }
       break;
-    case SS_DONE: break;
+
+    case SS_RUNNING:
+      if (inBand) {
+        // 累加 delta (避免大跳)
+        if (g_ssTickMs > 0) {
+          uint32_t dt = now - g_ssTickMs;
+          if (dt < 5000) g_ssAccumMs += dt;
+        }
+        g_ssTickMs = now;
+        g_ssOutBandMs = 0;
+        if (g_ssAccumMs >= (uint32_t)g_safetyStopSec * 1000UL) {
+          g_ssAccumMs = (uint32_t)g_safetyStopSec * 1000UL;
+          g_ss = SS_DONE;
+        }
+      } else {
+        // 出窗口 — 计时暂停, 仍保持 RUNNING (容差期内)
+        if (g_ssOutBandMs == 0) g_ssOutBandMs = now;
+        g_ssTickMs = 0;
+        // 超过容差 / 太深 -> 切回 ARMED (累积值保留)
+        if (now - g_ssOutBandMs > SS_GRACE_MS || tooDeep) {
+          g_ss = SS_ARMED;
+          g_ssOutBandMs = 0;
+        }
+      }
+      break;
+
+    case SS_DONE:
+      break;
   }
 }
 
@@ -866,6 +923,86 @@ static void drawAscentBar(int x, int y, int w, int h, float mpm) {
   tft.fillTriangle(ptr - 4, y - 7, ptr + 4, y - 7, ptr, y - 1, C(RGB_BLACK));
 }
 
+// ========== 通用页面框架 helper (Garmin 风格统一) ==========
+static void drawTopHeader(const char *title, const char *right = nullptr) {
+  tft.fillRect(0, 0, 320, 28, C(RGB_BLACK));
+  tft.drawFastHLine(0, 28, 320, C(RGB_DARK));
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+  u8g2.setBackgroundColor(C(RGB_BLACK));
+  u8g2.setForegroundColor(C(RGB_WHITE));
+  u8g2.drawUTF8(8, 21, title);
+  if (right) {
+    int w = u8g2.getUTF8Width(right);
+    u8g2.setForegroundColor(C(RGB_CYAN));
+    u8g2.drawUTF8(315 - w, 21, right);
+  }
+  u8g2.setBackgroundColor(C(RGB_ORANGE));
+}
+
+static void drawBottomButtonBar(const char *m, const char *up, const char *dn) {
+  tft.fillRect(0, 215, 320, 25, C(RGB_BLACK));
+  tft.drawFastHLine(0, 214, 320, C(RGB_DARK));
+  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setBackgroundColor(C(RGB_BLACK));
+  u8g2.setForegroundColor(C(RGB_WHITE));
+  tft.fillCircle(18, 227, 8, C(RGB_DARK));
+  tft.drawCircle(18, 227, 8, C(RGB_WHITE));
+  u8g2.drawUTF8(14, 232, "M");
+  u8g2.drawUTF8(32, 232, m);
+  tft.fillCircle(128, 227, 8, C(RGB_DARK));
+  tft.drawCircle(128, 227, 8, C(RGB_WHITE));
+  tft.fillTriangle(128, 222, 124, 231, 132, 231, C(RGB_WHITE));
+  u8g2.drawUTF8(142, 232, up);
+  tft.fillCircle(238, 227, 8, C(RGB_DARK));
+  tft.drawCircle(238, 227, 8, C(RGB_WHITE));
+  tft.fillTriangle(238, 232, 234, 223, 242, 223, C(RGB_WHITE));
+  u8g2.drawUTF8(252, 232, dn);
+  u8g2.setBackgroundColor(C(RGB_ORANGE));
+}
+
+// 气瓶图标 (Garmin 风格立体)
+static void drawTankIcon(int x, int y, int w, int h, int pct) {
+  int cx = x + w / 2;
+  int rTop = w / 2;
+  // 顶部圆顶
+  tft.fillCircle(cx, y + rTop, rTop, C(RGB_DARK));
+  // 阀门 (圆顶上方小柱)
+  tft.fillRect(cx - 3, y - 6, 6, 8, C(RGB_BLACK));
+  // 主体
+  tft.fillRect(x, y + rTop, w, h - rTop - 1, C(RGB_DARK));
+  // 内部气量填充 (从下往上)
+  int inset = 3;
+  int innerW = w - 2 * inset;
+  int innerH = h - rTop - 2 * inset;
+  if (innerH < 0) innerH = 0;
+  int fillH = innerH * pct / 100;
+  uint16_t col = (pct < 25) ? C(RGB_RED) : (pct < 50) ? C(RGB_YELLOW) : C(RGB_GREEN);
+  if (fillH > 0) {
+    tft.fillRect(x + inset, y + h - inset - fillH, innerW, fillH, col);
+  }
+  // 外框
+  tft.drawCircle(cx, y + rTop, rTop, C(RGB_BLACK));
+  tft.drawFastVLine(x, y + rTop, h - rTop, C(RGB_BLACK));
+  tft.drawFastVLine(x + w - 1, y + rTop, h - rTop, C(RGB_BLACK));
+  tft.drawFastHLine(x, y + h - 1, w, C(RGB_BLACK));
+}
+
+// 通用 24-dot 圆环 (传入颜色阈值, 用于 SPG / 通用百分比仪表)
+static void drawPercentRing(int cx, int cy, int r, float pct, uint16_t lowCol, uint16_t midCol, uint16_t hiCol) {
+  if (pct < 0) pct = 0; if (pct > 1) pct = 1;
+  uint16_t fg = (pct < 0.25f) ? lowCol : (pct < 0.5f) ? midCol : hiCol;
+  const int total = 24;
+  int active = (int)(pct * total + 0.5f);
+  for (int i = 0; i < total; i++) {
+    float a = (i * (360.0f / total) - 90) * 3.14159265f / 180.0f;
+    int dx = cx + (int)(r * cosf(a));
+    int dy = cy + (int)(r * sinf(a));
+    uint16_t col = (i < active) ? fg : C(RGB_DARK);
+    tft.fillCircle(dx, dy, 4, col);
+    if ((i % 6) == 0) tft.drawCircle(dx, dy, 5, C(RGB_WHITE));
+  }
+}
+
 void drawHudStaticFrame() {
   tft.fillScreen(C(RGB_ORANGE));
   // 顶栏 (黑底)
@@ -1140,112 +1277,198 @@ void drawTissue(float depth) {
 }
 
 void drawLastDive() {
-  char hdrR[24];
-  snprintf(hdrR, sizeof(hdrR), "累计 %u 次", g_diveTotal);
-  v4DrawHeader("上次潜水", hdrR);
-  v4DrawFooter("MODE:翻页");
-
-  tft.fillRect(0, 36, 320, 174, C(RGB_ORANGE));
-  char buf[48];
+  char buf[48], hdrR[24];
+  tft.fillScreen(C(RGB_ORANGE));
+  snprintf(hdrR, sizeof(hdrR), "第 %u 次", g_diveTotal);
+  drawTopHeader("上次潜水", hdrR);
+  drawBottomButtonBar("翻页", "--", "--");
 
   if (g_logCount == 0) {
-    v4Text(20, 110, "无潜水记录", C(RGB_BLACK));
+    u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+    u8g2.setBackgroundColor(C(RGB_ORANGE));
+    u8g2.setForegroundColor(C(RGB_DARK));
+    u8g2.drawUTF8(110, 120, "无潜水记录");
     return;
   }
 
   DiveRecord &r = g_log[0];
-  // 大字最深深度
-  u8g2.setFont(u8g2_font_logisoso26_tn);
-  u8g2.setForegroundColor(C(RGB_BLACK));
+
+  // ===== 中央大字最深深度 (y=38..118) =====
+  u8g2.setFont(u8g2_font_logisoso42_tr);
+  u8g2.setBackgroundColor(C(RGB_ORANGE));
   snprintf(buf, sizeof(buf), "%.1f", r.maxDepth);
-  int dw = u8g2.getUTF8Width(buf);
-  u8g2.drawUTF8(20, 90, buf);
-  v4Text(30 + dw, 90, "米 最深", C(RGB_BLACK));
+  int w = u8g2.getUTF8Width(buf);
+  int dx = 160 - w/2 - 6;
+  u8g2.setForegroundColor(C(RGB_DARK));
+  u8g2.drawUTF8(dx + 2, 90, buf);
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  u8g2.drawUTF8(dx, 88, buf);
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+  u8g2.drawUTF8(dx + w + 4, 93, "m");
+  // 小标签
+  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setForegroundColor(C(RGB_DARK));
+  u8g2.drawUTF8(135, 108, "最深深度");
 
-  // 4 行数据 (y=120/145/170/195)
-  snprintf(buf, sizeof(buf), "时长  %u:%02u", r.durationSec/60, r.durationSec%60);
-  v4Text(20, 122, buf, C(RGB_BLACK));
-  if (r.avgDepth > 0.1f) {
-    snprintf(buf, sizeof(buf), "均深  %.1f 米", r.avgDepth);
-    v4Text(180, 122, buf, C(RGB_BLACK));
+  // ===== 深度横条 (可视化最深/平均) y=125..140 =====
+  if (r.avgDepth > 0.1f && r.maxDepth > 0.1f) {
+    int barX = 30, barY = 122, barW = 260, barH = 14;
+    tft.fillRect(barX, barY, barW, barH, C(RGB_DARK));
+    int avgW = (int)(barW * r.avgDepth / r.maxDepth);
+    tft.fillRect(barX, barY, avgW, barH, C(RGB_BLUE));
+    tft.fillRect(barX + avgW, barY, barW - avgW, barH, C(RGB_GREEN));
+    tft.drawRect(barX, barY, barW, barH, C(RGB_BLACK));
+    // 标签
+    u8g2.setFont(u8g2_font_wqy12_t_gb2312);
+    u8g2.setForegroundColor(C(RGB_BLACK));
+    u8g2.drawUTF8(barX + 4, barY + 11, "均深");
+    snprintf(buf, sizeof(buf), "%.1f", r.avgDepth);
+    u8g2.drawUTF8(barX + 35, barY + 11, buf);
   }
 
-  snprintf(buf, sizeof(buf), "温度  %.1f 度", r.minTemp);
-  v4Text(20, 148, buf, C(RGB_BLACK));
+  // ===== 数据卡 4 列 (y=148..186, 高 38) =====
+  tft.drawFastHLine(0, 145, 320, C(RGB_DARK));
+  tft.drawFastVLine(80,  146, 38, C(RGB_DARK));
+  tft.drawFastVLine(160, 146, 38, C(RGB_DARK));
+  tft.drawFastVLine(240, 146, 38, C(RGB_DARK));
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  u8g2.drawUTF8(8,   158, "时长");
+  u8g2.drawUTF8(86,  158, "平均");
+  u8g2.drawUTF8(166, 158, "最低温");
+  u8g2.drawUTF8(246, 158, "电池");
+  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  // 时长
+  snprintf(buf, sizeof(buf), "%u:%02u", r.durationSec/60, r.durationSec%60);
+  u8g2.drawUTF8(8, 180, buf);
+  // 平均
+  if (r.avgDepth > 0.1f) snprintf(buf, sizeof(buf), "%.1fm", r.avgDepth);
+  else                   snprintf(buf, sizeof(buf), "--");
+  u8g2.drawUTF8(86, 180, buf);
+  // 最低温
+  snprintf(buf, sizeof(buf), "%.1f°", r.minTemp);
+  u8g2.setForegroundColor(r.minTemp < g_lowTempC ? C(RGB_BLUE) : C(RGB_BLACK));
+  u8g2.drawUTF8(166, 180, buf);
+  // 电池
+  if (r.batVoltage > 0.1f) snprintf(buf, sizeof(buf), "%.2fV", r.batVoltage);
+  else                     snprintf(buf, sizeof(buf), "--");
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  u8g2.drawUTF8(246, 180, buf);
 
-  if (r.batVoltage > 0.1f) {
-    snprintf(buf, sizeof(buf), "电池  %.2f V", r.batVoltage);
-    v4Text(180, 148, buf, C(RGB_BLACK));
-  }
-
-  v4Text(20, 174, r.saltwater ? "海水" : "淡水", C(RGB_BLACK));
+  // ===== 备注行 (y=192..210) =====
+  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  // 海/淡 徽章
+  drawBadge(8, 192, 38, 18, C(RGB_CYAN), C(RGB_BLACK), r.saltwater ? "海水" : "淡水", u8g2_font_wqy13_t_gb2312);
+  u8g2.setBackgroundColor(C(RGB_ORANGE));
   if (r.airUsedL > 1.0f) {
-    snprintf(buf, sizeof(buf), "耗气  %.0f L", r.airUsedL);
-    v4Text(100, 174, buf, C(RGB_BLACK));
+    snprintf(buf, sizeof(buf), "耗气 %.0fL", r.airUsedL);
+    u8g2.drawUTF8(56, 207, buf);
   }
-
-  // 距今时间
   if (r.endEpoch > 0) {
-    time_t nowEpoch;
-    time(&nowEpoch);
+    time_t nowEpoch; time(&nowEpoch);
     int32_t intervalSec = (int32_t)((uint32_t)nowEpoch - r.endEpoch);
     if (intervalSec >= 0 && intervalSec < 99 * 3600) {
       snprintf(buf, sizeof(buf), "距今 %ldh%02ldm",
                (long)(intervalSec / 3600), (long)((intervalSec / 60) % 60));
-      v4Text(20, 200, buf, C(RGB_BLUE));
+      u8g2.setForegroundColor(C(RGB_BLUE));
+      u8g2.drawUTF8(180, 207, buf);
     }
   }
 }
 
 void drawLogList() {
-  char hdrR[24];
-  snprintf(hdrR, sizeof(hdrR), "%u/%u", g_logViewIdx + 1, g_logCount);
-  v4DrawHeader("潜水日志", hdrR);
-  v4DrawFooter("UP/DOWN 浏览  长按DOWN在LOG页清空");
-
-  tft.fillRect(0, 36, 320, 174, C(RGB_ORANGE));
-
-  char buf[48];
+  char buf[48], hdrR[24];
+  tft.fillScreen(C(RGB_ORANGE));
+  snprintf(hdrR, sizeof(hdrR), "%u / %u", g_logViewIdx + 1, g_logCount);
+  drawTopHeader("潜水日志", hdrR);
+  drawBottomButtonBar("翻页", "上条", "下条");
 
   if (g_logCount == 0) {
-    v4Text(20, 110, "日志为空", C(RGB_BLACK));
+    u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+    u8g2.setBackgroundColor(C(RGB_ORANGE));
+    u8g2.setForegroundColor(C(RGB_DARK));
+    u8g2.drawUTF8(120, 120, "日志为空");
     return;
   }
-
   if (g_logViewIdx >= g_logCount) g_logViewIdx = g_logCount - 1;
   DiveRecord &r = g_log[g_logViewIdx];
+  uint16_t diveNo = g_diveTotal - g_logViewIdx;
 
-  // 大字: # 序号
-  u8g2.setFont(u8g2_font_logisoso26_tn);
-  u8g2.setForegroundColor(C(RGB_BLACK));
-  snprintf(buf, sizeof(buf), "#%u", g_diveTotal - g_logViewIdx);
-  u8g2.drawUTF8(20, 80, buf);
+  // ===== 顶部卡片: # + 最深 + 时长 (y=34..98) =====
+  // 序号徽章
+  snprintf(buf, sizeof(buf), "#%u", diveNo);
+  drawBadge(10, 38, 60, 30, C(RGB_DARK), C(RGB_WHITE), buf, u8g2_font_wqy16_t_gb2312);
+  u8g2.setBackgroundColor(C(RGB_ORANGE));
 
-  // 最深  (大字右边)
+  // 大字最深 (居中偏右)
+  u8g2.setFont(u8g2_font_logisoso28_tn);
   snprintf(buf, sizeof(buf), "%.1f", r.maxDepth);
-  u8g2.drawUTF8(140, 80, buf);
-  v4Text(230, 80, "米 最深", C(RGB_BLACK));
+  u8g2.setForegroundColor(C(RGB_DARK));
+  u8g2.drawUTF8(90, 75, buf);
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  u8g2.drawUTF8(88, 73, buf);
+  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.drawUTF8(170, 67, "最深");
+  u8g2.drawUTF8(170, 82, "(m)");
 
-  // 4 行细节
-  snprintf(buf, sizeof(buf), "时长  %u:%02u", r.durationSec/60, r.durationSec%60);
-  v4Text(20, 115, buf, C(RGB_BLACK));
-  v4Text(180, 115, r.saltwater ? "海水" : "淡水", C(RGB_BLACK));
+  // 时长 (右侧)
+  u8g2.setFont(u8g2_font_logisoso24_tn);
+  snprintf(buf, sizeof(buf), "%u:%02u", r.durationSec/60, r.durationSec%60);
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  u8g2.drawUTF8(215, 70, buf);
+  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.drawUTF8(280, 82, "时长");
 
-  snprintf(buf, sizeof(buf), "温度  %.1f 度", r.minTemp);
-  v4Text(20, 145, buf, C(RGB_BLACK));
-  if (r.batVoltage > 0.1f) {
-    snprintf(buf, sizeof(buf), "电池 %.2fV", r.batVoltage);
-    v4Text(180, 145, buf, C(RGB_BLACK));
-  }
+  // ===== 分隔线 + 海/淡 徽章 (y=100) =====
+  tft.drawFastHLine(0, 102, 320, C(RGB_DARK));
+  drawBadge(10, 108, 38, 18, C(RGB_CYAN), C(RGB_BLACK), r.saltwater ? "海水" : "淡水", u8g2_font_wqy13_t_gb2312);
+  u8g2.setBackgroundColor(C(RGB_ORANGE));
 
-  if (r.airUsedL > 1.0f) {
-    snprintf(buf, sizeof(buf), "耗气  %.0f L", r.airUsedL);
-    v4Text(20, 175, buf, C(RGB_BLACK));
-  }
+  // ===== 中部: 详情 2x2 网格 (y=130..210) =====
+  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  // 平均深度
   if (r.avgDepth > 0.1f) {
-    snprintf(buf, sizeof(buf), "均深  %.1f m", r.avgDepth);
-    v4Text(180, 175, buf, C(RGB_BLACK));
+    snprintf(buf, sizeof(buf), "平均  %.1f m", r.avgDepth);
+    u8g2.drawUTF8(60, 124, buf);
   }
+  // 距今
+  if (r.endEpoch > 0) {
+    time_t nowEpoch; time(&nowEpoch);
+    int32_t intervalSec = (int32_t)((uint32_t)nowEpoch - r.endEpoch);
+    if (intervalSec >= 0 && intervalSec < 99 * 3600) {
+      snprintf(buf, sizeof(buf), "距今 %ldh%02ldm",
+               (long)(intervalSec / 3600), (long)((intervalSec / 60) % 60));
+      u8g2.setForegroundColor(C(RGB_BLUE));
+      u8g2.drawUTF8(180, 124, buf);
+    }
+  }
+
+  // 4 数据卡 (y=140..210)
+  tft.drawFastVLine(80,  140, 70, C(RGB_DARK));
+  tft.drawFastVLine(160, 140, 70, C(RGB_DARK));
+  tft.drawFastVLine(240, 140, 70, C(RGB_DARK));
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
+  u8g2.setForegroundColor(C(RGB_DARK));
+  u8g2.drawUTF8(8,   154, "温度");
+  u8g2.drawUTF8(86,  154, "耗气");
+  u8g2.drawUTF8(166, 154, "电池");
+  u8g2.drawUTF8(246, 154, "总潜次");
+
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+  u8g2.setForegroundColor(r.minTemp < g_lowTempC ? C(RGB_BLUE) : C(RGB_BLACK));
+  snprintf(buf, sizeof(buf), "%.1f°", r.minTemp);
+  u8g2.drawUTF8(8, 180, buf);
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  if (r.airUsedL > 1.0f) snprintf(buf, sizeof(buf), "%.0fL", r.airUsedL);
+  else                   snprintf(buf, sizeof(buf), "--");
+  u8g2.drawUTF8(86, 180, buf);
+  if (r.batVoltage > 0.1f) snprintf(buf, sizeof(buf), "%.2fV", r.batVoltage);
+  else                     snprintf(buf, sizeof(buf), "--");
+  u8g2.drawUTF8(166, 180, buf);
+  snprintf(buf, sizeof(buf), "%u", g_diveTotal);
+  u8g2.drawUTF8(246, 180, buf);
 }
 
 void drawAir() {
@@ -1253,50 +1476,117 @@ void drawAir() {
   uint16_t total_L = totalAirL();
   float remainingBar = barFromAirL(g_remainingAirL);
   uint8_t pct = (total_L > 0) ? (uint8_t)((g_remainingAirL / total_L) * 100.0f) : 0;
-
-  // 顶栏右侧: 消耗速率
-  if (g_diving && g_currentSacL > 0.1f) {
-    float currentBarMin = (g_tankVolL > 0) ? (g_currentSacL / g_tankVolL) : 0;
-    snprintf(buf, sizeof(buf), "%.1f bar/min", currentBarMin);
-  } else {
-    snprintf(buf, sizeof(buf), "水面");
+  float currentBarMin = 0;
+  if (g_diving && g_currentSacL > 0.1f && g_tankVolL > 0) {
+    currentBarMin = g_currentSacL / g_tankVolL;
   }
-  v4DrawHeader("气量监控", buf);
-  v4DrawFooter("瓶配置在设置中修改");
-
-  tft.fillRect(0, 36, 320, 174, C(RGB_ORANGE));
-
-  // 大字剩余压力
-  u8g2.setFont(u8g2_font_logisoso26_tn);
-  u8g2.setForegroundColor(pct < 25 ? C(RGB_RED) : (pct < 50 ? C(RGB_BLUE) : C(RGB_BLACK)));
-  snprintf(buf, sizeof(buf), "%3d", (int)remainingBar);
-  u8g2.drawUTF8(20, 90, buf);
-  v4Text(110, 90, "bar", C(RGB_BLACK));
-  snprintf(buf, sizeof(buf), "%d%%", pct);
-  v4Text(220, 90, buf, C(RGB_BLACK));
-
-  // Air Time
+  int airMin = -1;
   if (g_diving && g_currentSacL > 0.1f) {
-    int airMin = (int)(g_remainingAirL / g_currentSacL);
+    airMin = (int)(g_remainingAirL / g_currentSacL);
     if (airMin > 999) airMin = 999;
-    snprintf(buf, sizeof(buf), "Air Time  %d 分钟", airMin);
-  } else {
-    snprintf(buf, sizeof(buf), "Air Time  --");
   }
-  v4Text(20, 130, buf, C(RGB_BLACK));
 
-  // 瓶配置
-  snprintf(buf, sizeof(buf), "瓶  %d bar × %d L   SAC %d L/分",
-           g_initialBar, g_tankVolL, g_sacLmin);
-  v4Text(20, 160, buf, C(RGB_BLACK));
+  // ===== 框架 =====
+  tft.fillScreen(C(RGB_ORANGE));
+  // 顶栏 + 标题 + 当前 bar/min
+  if (currentBarMin > 0) {
+    snprintf(buf, sizeof(buf), "%.1f bar/分", currentBarMin);
+  } else {
+    snprintf(buf, sizeof(buf), "AIR");
+  }
+  drawTopHeader("气瓶 SPG", buf);
+  drawBottomButtonBar("翻页", "升压", "降压");
 
-  // 大压力条 (y=180-200)
-  int barY = 180, barH = 20;
-  tft.drawRect(20, barY, 280, barH, C(RGB_BLACK));
-  int fillW = (g_initialBar > 0) ? (int)(278.0f * remainingBar / g_initialBar) : 0;
-  if (fillW > 278) fillW = 278;
-  uint16_t barColor = (pct < 25) ? C(RGB_RED) : (pct < 50) ? C(RGB_BLUE) : C(RGB_GREEN);
-  if (fillW > 0) tft.fillRect(21, barY + 1, fillW, barH - 2, barColor);
+  // ===== 左侧: 气瓶图标 (x=12 y=38 w=44 h=140) =====
+  drawTankIcon(12, 38, 44, 140, pct);
+
+  // ===== 右上: SPG 百分比圆环 (cx=260 cy=82 r=42) =====
+  drawPercentRing(260, 82, 42, pct / 100.0f, C(RGB_RED), C(RGB_YELLOW), C(RGB_GREEN));
+  // 环内百分比数字
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+  u8g2.setBackgroundColor(C(RGB_ORANGE));
+  uint16_t pCol = (pct < 25) ? C(RGB_RED) : (pct < 50) ? C(RGB_YELLOW) : C(RGB_GREEN);
+  snprintf(buf, sizeof(buf), "%d%%", pct);
+  int wn = u8g2.getUTF8Width(buf);
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  u8g2.drawUTF8(260 - wn/2, 87, buf);
+
+  // ===== 中央大字气压 (x=70..210 y=45..115) =====
+  u8g2.setFont(u8g2_font_logisoso42_tr);
+  snprintf(buf, sizeof(buf), "%d", (int)remainingBar);
+  int w = u8g2.getUTF8Width(buf);
+  int dx = 140 - w / 2;
+  // 阴影
+  u8g2.setForegroundColor(C(RGB_DARK));
+  u8g2.drawUTF8(dx + 2, 102, buf);
+  // 主字
+  u8g2.setForegroundColor(pCol);
+  u8g2.drawUTF8(dx, 100, buf);
+  // 单位
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  u8g2.drawUTF8(dx + w + 4, 105, "bar");
+
+  // ===== 起始 / 用量 (y=128) =====
+  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  snprintf(buf, sizeof(buf), "起始 %d", g_initialBar);
+  u8g2.drawUTF8(72, 130, buf);
+  int used = g_initialBar - (int)remainingBar;
+  if (used < 0) used = 0;
+  snprintf(buf, sizeof(buf), "用量 %d", used);
+  u8g2.drawUTF8(170, 130, buf);
+
+  // ===== 大压力条 (y=144..162) =====
+  int barX = 70, barY = 144, barW = 240, barH = 18;
+  tft.fillRect(barX, barY, barW, barH, C(RGB_DARK));
+  int fillW = (g_initialBar > 0) ? (int)(barW * (float)remainingBar / g_initialBar) : 0;
+  if (fillW > barW) fillW = barW;
+  if (fillW > 0) tft.fillRect(barX, barY, fillW, barH, pCol);
+  tft.drawRect(barX, barY, barW, barH, C(RGB_BLACK));
+  // 50bar 刻度 (Garmin 风格)
+  for (int v = 50; v < g_initialBar; v += 50) {
+    int xt = barX + barW * v / g_initialBar;
+    tft.drawFastVLine(xt, barY + barH, 3, C(RGB_BLACK));
+    char tk[6]; snprintf(tk, sizeof(tk), "%d", v);
+    u8g2.setFont(u8g2_font_wqy12_t_gb2312);
+    u8g2.setForegroundColor(C(RGB_DARK));
+    int tw = u8g2.getUTF8Width(tk);
+    u8g2.drawUTF8(xt - tw/2, barY + barH + 13, tk);
+  }
+
+  // ===== 数据卡 4 列 (y=180..213, 列宽 80) =====
+  tft.drawFastHLine(0, 178, 320, C(RGB_DARK));
+  tft.drawFastVLine(80,  179, 35, C(RGB_DARK));
+  tft.drawFastVLine(160, 179, 35, C(RGB_DARK));
+  tft.drawFastVLine(240, 179, 35, C(RGB_DARK));
+
+  // 标签
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
+  u8g2.setBackgroundColor(C(RGB_ORANGE));
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  u8g2.drawUTF8(8,   190, "AirTime");
+  u8g2.drawUTF8(94,  190, "SAC");
+  u8g2.drawUTF8(166, 190, "瓶容");
+  u8g2.drawUTF8(246, 190, "气体");
+
+  // 数值
+  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  // AirTime
+  if (airMin >= 0) snprintf(buf, sizeof(buf), "%d 分", airMin);
+  else             snprintf(buf, sizeof(buf), "--");
+  u8g2.setForegroundColor(airMin >= 0 && airMin < 20 ? C(RGB_RED) : C(RGB_BLACK));
+  u8g2.drawUTF8(8, 210, buf);
+  // SAC
+  snprintf(buf, sizeof(buf), "%d L/m", g_sacLmin);
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  u8g2.drawUTF8(94, 210, buf);
+  // 瓶容
+  snprintf(buf, sizeof(buf), "%dL", g_tankVolL);
+  u8g2.drawUTF8(166, 210, buf);
+  // 气体类型
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  u8g2.drawUTF8(246, 210, "AIR");
 }
 
 // 体内氮气安全页 - 基于 ZHL-16C 衍生指标
@@ -1507,42 +1797,107 @@ void drawBatHist() {
 }
 
 void drawStats() {
-  char hdrR[24];
+  char buf[48], hdrR[24];
+  tft.fillScreen(C(RGB_ORANGE));
   float alt = estimateAltitudeM();
   if (alt > 50.0f) snprintf(hdrR, sizeof(hdrR), "海拔 %.0fm", alt);
-  else if (g_batPresent) snprintf(hdrR, sizeof(hdrR), "%.2fV %u%%", g_batVoltage, g_batPct);
-  else snprintf(hdrR, sizeof(hdrR), "未接电池");
-  v4DrawHeader("总览统计", hdrR);
-  v4DrawFooter("终身潜水数据汇总");
+  else if (g_batPresent) snprintf(hdrR, sizeof(hdrR), "%.2fV", g_batVoltage);
+  else snprintf(hdrR, sizeof(hdrR), "--");
+  drawTopHeader("总览统计", hdrR);
+  drawBottomButtonBar("翻页", "--", "--");
 
-  tft.fillRect(0, 36, 320, 174, C(RGB_ORANGE));
+  // ===== 顶部 4 个圆角徽章 (大数值) y=38..96 =====
+  // 潜水次数
+  snprintf(buf, sizeof(buf), "%u", g_diveTotal);
+  tft.fillRoundRect(8, 38, 70, 58, 5, C(RGB_DARK));
+  u8g2.setFont(u8g2_font_logisoso28_tn);
+  u8g2.setBackgroundColor(C(RGB_DARK));
+  u8g2.setForegroundColor(C(RGB_WHITE));
+  int w = u8g2.getUTF8Width(buf);
+  u8g2.drawUTF8(8 + (70 - w)/2, 80, buf);
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
+  u8g2.drawUTF8(15, 93, "潜水次");
 
-  char buf[48];
-  // 4 行数据 y=70/110/150/190
-  snprintf(buf, sizeof(buf), "潜水次数      %u 次", g_diveTotal);
-  v4Text(30, 70, buf, C(RGB_BLACK));
+  // 历史最深
+  tft.fillRoundRect(86, 38, 70, 58, 5, C(RGB_DARK));
+  snprintf(buf, sizeof(buf), "%.0f", g_diveTotalMaxD);
+  u8g2.setFont(u8g2_font_logisoso28_tn);
+  w = u8g2.getUTF8Width(buf);
+  u8g2.drawUTF8(86 + (70 - w)/2, 78, buf);
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
+  u8g2.drawUTF8(93, 93, "历史最深 m");
 
-  snprintf(buf, sizeof(buf), "历史最深      %.1f 米", g_diveTotalMaxD);
-  v4Text(30, 110, buf, C(RGB_BLACK));
-
+  // 累计小时
   uint32_t totMin = g_lifetimeUnderwaterSec / 60;
   uint32_t totH   = totMin / 60;
-  snprintf(buf, sizeof(buf), "累计水下      %luh%02lum",
+  tft.fillRoundRect(164, 38, 70, 58, 5, C(RGB_DARK));
+  snprintf(buf, sizeof(buf), "%lu", (unsigned long)totH);
+  u8g2.setFont(u8g2_font_logisoso28_tn);
+  w = u8g2.getUTF8Width(buf);
+  u8g2.drawUTF8(164 + (70 - w)/2, 78, buf);
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
+  u8g2.drawUTF8(175, 93, "累计 h");
+
+  // 平均次数 (估算每月)
+  tft.fillRoundRect(242, 38, 70, 58, 5, C(RGB_DARK));
+  if (g_diveTotal > 0) {
+    snprintf(buf, sizeof(buf), "%.0f", (float)totMin / g_diveTotal);
+  } else {
+    snprintf(buf, sizeof(buf), "--");
+  }
+  u8g2.setFont(u8g2_font_logisoso28_tn);
+  w = u8g2.getUTF8Width(buf);
+  u8g2.drawUTF8(242 + (70 - w)/2, 78, buf);
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
+  u8g2.drawUTF8(255, 93, "均时长 m");
+
+  u8g2.setBackgroundColor(C(RGB_ORANGE));
+
+  // ===== 中部分隔 + 详细列表 (y=104..210) =====
+  tft.drawFastHLine(0, 104, 320, C(RGB_DARK));
+
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+  u8g2.setForegroundColor(C(RGB_BLACK));
+
+  // 累计水下
+  snprintf(buf, sizeof(buf), "累计水下  %luh %02lum",
            (unsigned long)totH, (unsigned long)(totMin % 60));
-  v4Text(30, 150, buf, C(RGB_BLACK));
+  u8g2.drawUTF8(20, 128, buf);
 
   // 距上次潜水
   if (g_logCount > 0 && g_log[0].endEpoch > 0) {
-    time_t nowEpoch;
-    time(&nowEpoch);
+    time_t nowEpoch; time(&nowEpoch);
     int32_t intervalSec = (int32_t)((uint32_t)nowEpoch - g_log[0].endEpoch);
-    if (intervalSec >= 0 && intervalSec < 99 * 3600) {
-      snprintf(buf, sizeof(buf), "距上次潜水    %ldh%02ldm",
-               (long)(intervalSec / 3600), (long)((intervalSec / 60) % 60));
-      v4Text(30, 190, buf, C(RGB_BLUE));
+    if (intervalSec >= 0) {
+      if (intervalSec < 99 * 3600) {
+        snprintf(buf, sizeof(buf), "距上次  %ldh %02ldm",
+                 (long)(intervalSec / 3600), (long)((intervalSec / 60) % 60));
+      } else {
+        snprintf(buf, sizeof(buf), "距上次  %ld 天", (long)(intervalSec / 86400));
+      }
+      u8g2.setForegroundColor(C(RGB_BLUE));
+      u8g2.drawUTF8(20, 152, buf);
     }
   }
 
+  // 海拔补偿
+  if (alt > 50.0f) {
+    snprintf(buf, sizeof(buf), "海拔修正  %.0f m", alt);
+    u8g2.setForegroundColor(C(RGB_BLACK));
+    u8g2.drawUTF8(20, 176, buf);
+  }
+
+  // 当前 N2 + NDL (实时)
+  float n2 = computeTissueLoadPct(0);
+  float ndl = computeNDL(0);
+  snprintf(buf, sizeof(buf), "组织 N2  %.0f%%", n2);
+  u8g2.setForegroundColor(n2 > 60 ? C(RGB_RED) : C(RGB_BLACK));
+  u8g2.drawUTF8(20, 200, buf);
+  if (ndl < 99) {
+    snprintf(buf, sizeof(buf), "(NDL %.0f分)", ndl);
+    u8g2.setForegroundColor(C(RGB_DARK));
+    u8g2.drawUTF8(165, 200, buf);
+  }
 }
 
 // 设置菜单的项名 / 值 / 调整
@@ -2240,6 +2595,9 @@ void loop() {
       g_ss = SS_IDLE;
       g_ssAccumMs = 0;
       g_ssArmCondition = false;
+      g_ssTickMs = 0;
+      g_ssOutBandMs = 0;
+      g_ssSurfaceMs = 0;
       g_remainingAirL = (float)totalAirL();   // 满瓶气量
       g_currentSacL = 0;
       g_diveDepthSum = 0;       // 平均深度累计重置
