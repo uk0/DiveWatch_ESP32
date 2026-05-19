@@ -380,7 +380,7 @@ float computeFullDesaturationHours() {
 #define SS_ABORT_DEPTH    7.5f
 #define SS_SURFACE_RESET  1.0f
 #define SS_SURFACE_MS     60000U
-#define SS_DEEP_TRIGGER   10.0f
+#define SS_DEEP_TRIGGER   6.0f       // 测试模式: 6m 即触发 ARM (PADI 标准为 10m, 便于桌面演示)
 #define SS_GRACE_MS       30000U     // 出窗口容差 (抖动保护)
 
 enum SSState : uint8_t { SS_IDLE = 0, SS_ARMED, SS_RUNNING, SS_DONE };
@@ -2136,44 +2136,75 @@ void settingsItemAdjust(uint8_t i, int delta) {
 void drawSettings() {
   // 智能缓存: 只在切项 / 页面 dirty 时重画
   static uint8_t lastItem = 255;
-  if (!g_pageDirty && lastItem == g_settingsItem) return;  // 没变化, 不重画 (防闪烁)
+  if (!g_pageDirty && lastItem == g_settingsItem) return;
   lastItem = g_settingsItem;
 
   char buf[24];
-  snprintf(buf, sizeof(buf), "%u/%u", g_settingsItem + 1, SETTINGS_COUNT);
-  v4DrawHeader("设置", buf);
-  v4DrawFooter("MODE切项 UP/DOWN改 长按MODE保存");
+  tft.fillScreen(C(RGB_ORANGE));
+  snprintf(buf, sizeof(buf), "%u / %u", g_settingsItem + 1, SETTINGS_COUNT);
+  drawTopHeader("设 置", buf);
+  drawBottomButtonBar("切项", "增", "减");
 
-  // 6 项可见, 每项 25px 行高 (y=50,75,100,125,150,175)
-  const int VISIBLE = 6;
+  // ===== 列表区 y=32..213 =====
+  const int VISIBLE  = 5;
+  const int ITEM_H   = 36;
+  const int LIST_TOP = 34;
+
   int first = 0;
   if (g_settingsItem >= VISIBLE) first = g_settingsItem - VISIBLE + 1;
   if (first > SETTINGS_COUNT - VISIBLE) first = SETTINGS_COUNT - VISIBLE;
   if (first < 0) first = 0;
 
-  // 局部清内容区
-  tft.fillRect(0, 36, 320, 170, C(RGB_ORANGE));
-
   for (int i = 0; i < VISIBLE && first + i < SETTINGS_COUNT; i++) {
     uint8_t idx = first + i;
-    int y = 52 + i * 26;
+    int y = LIST_TOP + i * ITEM_H;        // 卡片顶部
     bool sel = (idx == g_settingsItem);
-    if (sel) tft.fillRect(0, y - 18, 320, 22, C(RGB_DARK));
-    uint16_t fg = sel ? C(RGB_WHITE) : C(RGB_BLACK);
-    u8g2.setBackgroundColor(sel ? C(RGB_DARK) : C(RGB_ORANGE));
-    v4Text(sel ? 8 : 16, y, sel ? ">" : "  ", fg);
-    v4Text(30, y, settingsItemName(idx), fg);
+
+    // 卡片背景 (圆角)
+    uint16_t cardBg = sel ? C(RGB_DARK) : 0xFC60;   // 选中=深, 未选=暗橘
+    uint16_t cardFg = sel ? C(RGB_WHITE) : C(RGB_BLACK);
+    tft.fillRoundRect(6, y, 296, ITEM_H - 4, 4, cardBg);
+    if (sel) tft.drawRoundRect(6, y, 296, ITEM_H - 4, 4, C(RGB_YELLOW));
+
+    // 左侧选中指示三角
+    if (sel) {
+      tft.fillTriangle(12, y + 10, 12, y + 22, 22, y + 16, C(RGB_YELLOW));
+    }
+
+    // 项名
+    u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+    u8g2.setBackgroundColor(cardBg);
+    u8g2.setForegroundColor(cardFg);
+    u8g2.drawUTF8(30, y + 20, settingsItemName(idx));
+
+    // 项值 (右对齐, 选中时高亮颜色)
     char vbuf[24];
     settingsItemValue(idx, vbuf, sizeof(vbuf));
     int vw = u8g2.getUTF8Width(vbuf);
-    v4Text(310 - vw, y, vbuf, fg);
-    u8g2.setBackgroundColor(C(RGB_ORANGE));
-  }
+    if (sel) {
+      u8g2.setForegroundColor(C(RGB_YELLOW));
+    } else {
+      u8g2.setForegroundColor(C(RGB_BLUE));
+    }
+    u8g2.drawUTF8(294 - vw, y + 20, vbuf);
 
-  // 滚动箭头
-  u8g2.setForegroundColor(C(RGB_BLACK));
-  if (first > 0)                          u8g2.drawUTF8(305, 50,  "^");
-  if (first + VISIBLE < SETTINGS_COUNT)   u8g2.drawUTF8(305, 200, "v");
+    // 修改提示 (选中时显示 "▲▼ 调节")
+    if (sel) {
+      u8g2.setFont(u8g2_font_wqy12_t_gb2312);
+      u8g2.setForegroundColor(C(RGB_CYAN));
+      // 实际不画 (空间不够), 由底栏代替
+    }
+  }
+  u8g2.setBackgroundColor(C(RGB_ORANGE));
+
+  // ===== 右侧滚动条 (y=34..213, 高 179) =====
+  int sbX = 305, sbY = 34, sbH = 179;
+  tft.fillRect(sbX, sbY, 4, sbH, C(RGB_DARK));
+  int thumbH = sbH * VISIBLE / SETTINGS_COUNT;
+  if (thumbH < 12) thumbH = 12;
+  int thumbY = sbY + (sbH - thumbH) * first / (SETTINGS_COUNT - VISIBLE);
+  if (SETTINGS_COUNT <= VISIBLE) thumbY = sbY;
+  tft.fillRect(sbX, thumbY, 4, thumbH, C(RGB_YELLOW));
 }
 
 void drawSettingsAndSend() {
@@ -2186,32 +2217,43 @@ void drawTimeEdit() {
   if (!g_pageDirty && lastH == g_editHH && lastM == g_editMM && lastF == g_editField) return;
   lastH = g_editHH; lastM = g_editMM; lastF = g_editField;
 
-  v4DrawHeader("设置时间", "MODE 保存");
-  v4DrawFooter("UP/DN 增减   MODE 切换字段");
+  tft.fillScreen(C(RGB_ORANGE));
+  drawTopHeader("设置时间", "长按M保存");
+  drawBottomButtonBar("切字段", "+1", "-1");
 
-  tft.fillRect(0, 36, 320, 174, C(RGB_ORANGE));
-
-  // 大字时间 居中 (logisoso50 50px)
+  // ===== 大字时间 居中 (logisoso50 50px, 加阴影) =====
   char buf[8];
   u8g2.setFont(u8g2_font_logisoso50_tn);
-  u8g2.setForegroundColor(C(RGB_BLACK));
   u8g2.setBackgroundColor(C(RGB_ORANGE));
   snprintf(buf, sizeof(buf), "%02u:%02u", g_editHH, g_editMM);
   int w = u8g2.getUTF8Width(buf);
   int x = (320 - w) / 2;
-  u8g2.drawUTF8(x, 130, buf);
+  // 阴影
+  u8g2.setForegroundColor(C(RGB_DARK));
+  u8g2.drawUTF8(x + 2, 117, buf);
+  // 主字
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  u8g2.drawUTF8(x, 115, buf);
 
-  // 下划线指示当前编辑字段
+  // ===== 当前字段下划线 (画粗红线) =====
   int colonOffset = u8g2.getUTF8Width("00");
   int afterColon  = u8g2.getUTF8Width("00:");
   int hhX = x;
   int mmX = x + afterColon;
-  // 下划线指示当前编辑字段 (画 4px 粗)
-  if (g_editField == 0) tft.fillRect(hhX, 135, colonOffset, 4, C(RGB_RED));
-  else                  tft.fillRect(mmX, 135, colonOffset, 4, C(RGB_RED));
+  int undX = (g_editField == 0) ? hhX : mmX;
+  tft.fillRoundRect(undX, 122, colonOffset, 6, 2, C(RGB_RED));
 
-  v4Text((320 - u8g2.getUTF8Width("当前编辑: 时 / 分")) / 2, 170,
-         g_editField == 0 ? "当前编辑: 时" : "当前编辑: 分", C(RGB_BLUE));
+  // ===== 上下三角符号指示可调 =====
+  int triX = undX + colonOffset / 2;
+  // 上三角 (▲)
+  tft.fillTriangle(triX - 8, 50, triX + 8, 50, triX, 38, C(RGB_GREEN));
+  // 下三角 (▼)
+  tft.fillTriangle(triX - 8, 140, triX + 8, 140, triX, 152, C(RGB_GREEN));
+
+  // ===== 字段徽章 (中下方) =====
+  drawBadge((320 - 110)/2, 165, 110, 22, C(RGB_BLUE), C(RGB_WHITE),
+            g_editField == 0 ? "正在编辑 时" : "正在编辑 分",
+            u8g2_font_wqy16_t_gb2312);
 }
 
 void drawSplash() {
