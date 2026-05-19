@@ -41,16 +41,18 @@
 #define TFT_MOSI  38
 #define TFT_SCK   48
 
-// ===== RGB565 颜色 (源代码用 RGB, 通过 C() swap 适配 BGR 屏) =====
-#define RGB_ORANGE  0xFD20
-#define RGB_BLACK   0x0000
-#define RGB_WHITE   0xFFFF
-#define RGB_RED     0xF800
-#define RGB_GREEN   0x07E0
-#define RGB_BLUE    0x001F
-#define RGB_YELLOW  0xFFE0
-#define RGB_CYAN    0x07FF
-#define RGB_DARK    0x4208
+// ===== RGB565 颜色 (本屏 invertDisplay(true) + swapRB 流程下, hex 已按实际显示色重新映射) =====
+// 流程: 源代码值 X -> swapRB(X) -> 写入帧缓冲 Y -> ST7789 反转 -> 屏幕显示 ~Y
+// 故 hex 值不是标准 RGB565, 而是 swapRB(~目标像素) 反推所得
+#define RGB_ORANGE  0xFD20    // 屏幕显示橙色 ✓ (实测)
+#define RGB_BLACK   0x0000    // 屏幕显示黑色 ✓ (实测)
+#define RGB_WHITE   0xFFFF    // 屏幕显示白色 ✓ (实测)
+#define RGB_RED     0xFFE0    // 屏幕显示红色 (原 0xF800 会显示成黄)
+#define RGB_GREEN   0xF81F    // 屏幕显示绿色 (原 0x07E0 会显示成紫红)
+#define RGB_BLUE    0x07FF    // 屏幕显示蓝色 (原 0x001F 会显示成浅青)
+#define RGB_YELLOW  0xF800    // 屏幕显示黄色 (现在不用, 留宏避免编译错)
+#define RGB_CYAN    0x07E0    // 屏幕显示青色 (现在不用)
+#define RGB_DARK    0x4208    // 灰色 (R=B 对称, swapRB 不变, 反相后浅灰)
 
 // swap R/B 5-bit (G 6-bit 不变)
 inline uint16_t swapRB(uint16_t c) {
