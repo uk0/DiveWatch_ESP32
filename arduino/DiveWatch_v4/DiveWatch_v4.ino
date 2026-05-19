@@ -1475,6 +1475,11 @@ void settingsItemAdjust(uint8_t i, int delta) {
 }
 
 void drawSettings() {
+  // 智能缓存: 只在切项 / 页面 dirty 时重画
+  static uint8_t lastItem = 255;
+  if (!g_pageDirty && lastItem == g_settingsItem) return;  // 没变化, 不重画 (防闪烁)
+  lastItem = g_settingsItem;
+
   char buf[24];
   snprintf(buf, sizeof(buf), "%u/%u", g_settingsItem + 1, SETTINGS_COUNT);
   v4DrawHeader("设置", buf);
@@ -1517,6 +1522,11 @@ void drawSettingsAndSend() {
 }
 
 void drawTimeEdit() {
+  // 缓存: 只在 HH/MM/field 变化 / 页面 dirty 时重画
+  static uint8_t lastH = 99, lastM = 99, lastF = 99;
+  if (!g_pageDirty && lastH == g_editHH && lastM == g_editMM && lastF == g_editField) return;
+  lastH = g_editHH; lastM = g_editMM; lastF = g_editField;
+
   v4DrawHeader("设置时间", "MODE 保存");
   v4DrawFooter("UP/DN 增减   MODE 切换字段");
 
@@ -1822,8 +1832,13 @@ void setup() {
   if (g_alarmDepth < 5 || g_alarmDepth > 100)       g_alarmDepth = 30;
   if (g_ascentLimit < 1 || g_ascentLimit > 50)      g_ascentLimit = 9;
   if (g_descentLimit < 1 || g_descentLimit > 100)   g_descentLimit = 18;
-  Serial.printf("[SANITY] cons=%u density=%.0f alarmD=%.0f ascent=%.0f descent=%.0f\n",
-                g_conservatism, g_fluidDensity, g_alarmDepth, g_ascentLimit, g_descentLimit);
+  g_buzzerEnable = true;   // 强制开启蜂鸣器 (NVS 可能误存 false)
+  Serial.printf("[SANITY] cons=%u density=%.0f alarmD=%.0f ascent=%.0f descent=%.0f buzz=%d\n",
+                g_conservatism, g_fluidDensity, g_alarmDepth, g_ascentLimit, g_descentLimit, g_buzzerEnable);
+
+  // 蜂鸣器测试 3 长鸣 (硬件验证)
+  Serial.println("[TEST] 蜂鸣器测试 3 长鸣");
+  beepBlocking(3, 200, 100);
 
   g_lastInteractMs = millis();
 }
@@ -1838,8 +1853,10 @@ void loop() {
   btnPoll(g_btnDown, now);
 
   // ---- 长按 MODE 5 秒 -> 关机 (深度睡眠) ----
+  // 编辑/设置模式下不触发, 避免覆盖"长按保存"
   static bool s_shutdownArmed = false;
-  if (!g_btnMode.stable && (now - g_btnMode.pressedAtMs) > 5000 && !s_shutdownArmed) {
+  if (!g_btnMode.stable && (now - g_btnMode.pressedAtMs) > 5000 && !s_shutdownArmed
+      && !g_editingTime && !g_inSettings) {
     s_shutdownArmed = true;
     enterDeepSleep();
     // 不会返回
