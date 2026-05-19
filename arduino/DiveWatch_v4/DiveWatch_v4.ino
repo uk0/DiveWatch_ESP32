@@ -1717,97 +1717,156 @@ void drawAir() {
 
 // 体内氮气安全页 - 基于 ZHL-16C 衍生指标
 void drawN2() {
-  v4DrawHeader("体内氮气 ZHL-16C");
-  v4DrawFooter("基于 Bühlmann 模型");
+  char buf[48];
+  tft.fillScreen(C(RGB_ORANGE));
+  drawTopHeader("体内氮气", "ZHL-16C");
+  drawBottomButtonBar("翻页", "--", "--");
 
-  tft.fillRect(0, 36, 320, 174, C(RGB_ORANGE));
-  char buf[40];
-
-  // 1. 大字: 氮气负荷 % + 风险
   float loadPct = computeTissueLoadPct(g_depthSmooth);
-  const char *risk;
-  uint16_t riskColor;
-  if (loadPct < 60.0f)      { risk = "低风险"; riskColor = C(RGB_GREEN); }
-  else if (loadPct < 80.0f) { risk = "中风险"; riskColor = C(RGB_BLUE); }
-  else                       { risk = "高风险"; riskColor = C(RGB_RED); }
+  uint16_t loadCol = (loadPct < 60) ? C(RGB_GREEN) : (loadPct < 80) ? C(RGB_BLACK) : C(RGB_RED);
+  const char *risk = (loadPct < 60) ? "低风险" : (loadPct < 80) ? "中风险" : "高风险";
 
-  u8g2.setFont(u8g2_font_logisoso26_tn);
-  u8g2.setForegroundColor(C(RGB_BLACK));
+  // ===== 左侧: 圆环 + 中央百分比 =====
+  drawPercentRing(80, 95, 50, loadPct / 100.0f, C(RGB_GREEN), C(RGB_BLACK), C(RGB_RED));
+  // 中央大字百分比
+  u8g2.setFont(u8g2_font_logisoso28_tn);
+  u8g2.setBackgroundColor(C(RGB_ORANGE));
   snprintf(buf, sizeof(buf), "%.0f", loadPct);
-  u8g2.drawUTF8(20, 80, buf);
-  v4Text(85, 80, "%", C(RGB_BLACK));
-  v4Text(20, 100, "氮气负荷", C(RGB_BLACK));
+  int w = u8g2.getUTF8Width(buf);
+  u8g2.setForegroundColor(loadCol);
+  u8g2.drawUTF8(80 - w/2, 102, buf);
+  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  u8g2.drawUTF8(67, 118, "% 负荷");
 
-  v4Text(200, 80, risk, riskColor);
+  // ===== 右侧: 风险徽章 + 详情 =====
+  drawBadge(170, 50, 130, 26, loadCol, C(RGB_WHITE), risk, u8g2_font_wqy16_t_gb2312);
+  u8g2.setBackgroundColor(C(RGB_ORANGE));
 
-  // 2. 最快/最慢组织室
+  // 最快/最慢组织室 (柱状对比)
   float fastSat = computeSaturationPct(0,  g_depthSmooth);
   float slowSat = computeSaturationPct(15, g_depthSmooth);
-  snprintf(buf, sizeof(buf), "最快 %.0f%%   最慢 %.0f%%", fastSat, slowSat);
-  v4Text(20, 130, buf, C(RGB_BLACK));
+  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  snprintf(buf, sizeof(buf), "最快 %.0f%%", fastSat);
+  u8g2.drawUTF8(170, 95, buf);
+  snprintf(buf, sizeof(buf), "最慢 %.0f%%", slowSat);
+  u8g2.drawUTF8(170, 115, buf);
 
-  // 3. 禁飞时间
+  // ===== 分隔线 =====
+  tft.drawFastHLine(0, 145, 320, C(RGB_DARK));
+
+  // ===== 底部: 禁飞 / 脱饱和 (2 数据卡) =====
+  tft.drawFastVLine(160, 146, 67, C(RGB_DARK));
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  u8g2.drawUTF8(8,   158, "禁飞时间");
+  u8g2.drawUTF8(168, 158, "完全脱饱和");
+
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+  // 禁飞
   float noFlyH = computeNoFlyTimeHours();
   if (noFlyH < 0.05f) {
-    v4Text(20, 160, "禁飞:  可飞行", C(RGB_GREEN));
+    u8g2.setForegroundColor(C(RGB_GREEN));
+    u8g2.drawUTF8(8, 185, "可飞行");
   } else if (noFlyH < 100.0f) {
-    snprintf(buf, sizeof(buf), "禁飞:  %dh%02dm",
+    snprintf(buf, sizeof(buf), "%dh %02dm",
              (int)noFlyH, (int)((noFlyH - (int)noFlyH) * 60));
-    v4Text(20, 160, buf, C(RGB_RED));
+    u8g2.setForegroundColor(C(RGB_RED));
+    u8g2.drawUTF8(8, 185, buf);
   } else {
-    v4Text(20, 160, "禁飞:  >100h", C(RGB_RED));
+    u8g2.setForegroundColor(C(RGB_RED));
+    u8g2.drawUTF8(8, 185, ">100h");
   }
-
-  // 4. 完全脱饱和
+  // 脱饱和
   float desatH = computeFullDesaturationHours();
   if (desatH < 0.05f) {
-    v4Text(20, 190, "脱饱和:  已完成", C(RGB_GREEN));
+    u8g2.setForegroundColor(C(RGB_GREEN));
+    u8g2.drawUTF8(168, 185, "已完成");
   } else if (desatH < 100.0f) {
-    snprintf(buf, sizeof(buf), "脱饱和:  %.0f 小时", desatH);
-    v4Text(20, 190, buf, C(RGB_BLACK));
+    snprintf(buf, sizeof(buf), "%.0f 小时", desatH);
+    u8g2.setForegroundColor(C(RGB_BLACK));
+    u8g2.drawUTF8(168, 185, buf);
   } else {
-    v4Text(20, 190, "脱饱和:  >100 小时", C(RGB_BLACK));
+    u8g2.setForegroundColor(C(RGB_BLACK));
+    u8g2.drawUTF8(168, 185, ">100h");
   }
 }
 
 void drawPlan() {
-  char hdrR[24];
-  snprintf(hdrR, sizeof(hdrR), "当前 %.1f m", g_depthSmooth);
-  v4DrawHeader("潜水规划", hdrR);
-  v4DrawFooter("UP/DOWN 改计划深度");
+  char buf[48], hdrR[24];
+  tft.fillScreen(C(RGB_ORANGE));
+  snprintf(hdrR, sizeof(hdrR), "当前 %.1fm", g_depthSmooth);
+  drawTopHeader("潜水规划", hdrR);
+  drawBottomButtonBar("翻页", "+1m", "-1m");
 
-  tft.fillRect(0, 36, 320, 174, C(RGB_ORANGE));
-  char buf[48];
-
-  // 大字: 计划深度
-  u8g2.setFont(u8g2_font_logisoso26_tn);
-  u8g2.setForegroundColor(C(RGB_BLACK));
+  // ===== 大字: 计划深度 (居中, 阴影) =====
+  u8g2.setFont(u8g2_font_logisoso50_tn);
+  u8g2.setBackgroundColor(C(RGB_ORANGE));
   snprintf(buf, sizeof(buf), "%u", g_planDepthM);
-  u8g2.drawUTF8(20, 90, buf);
-  v4Text(110, 90, "米 计划深度", C(RGB_BLACK));
+  int w = u8g2.getUTF8Width(buf);
+  int dx = 160 - w/2 - 6;
+  u8g2.setForegroundColor(C(RGB_DARK));
+  u8g2.drawUTF8(dx + 2, 102, buf);
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  u8g2.drawUTF8(dx, 100, buf);
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+  u8g2.drawUTF8(dx + w + 4, 105, "m");
 
-  // NDL @ 该深度
+  // 标签
+  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setForegroundColor(C(RGB_DARK));
+  u8g2.drawUTF8(125, 120, "计划深度");
+
+  // ===== 计算 NDL @ 计划深度 =====
   float ndl = computeNDL((float)g_planDepthM);
-  uint16_t color = C(RGB_BLACK);
-  if (ndl >= 99.0f)      snprintf(buf, sizeof(buf), "NDL  >99 分钟"), color = C(RGB_GREEN);
-  else if (ndl <= 0.0f)  snprintf(buf, sizeof(buf), "NDL  需要减压!"), color = C(RGB_RED);
-  else                   snprintf(buf, sizeof(buf), "NDL  %.0f 分钟", ndl), color = (ndl < 5) ? C(RGB_RED) : C(RGB_BLACK);
-  v4Text(20, 130, buf, color);
+  uint16_t ndlCol;
+  const char *ndlTxt;
+  if (ndl >= 99.0f)        { ndlTxt = ">99 分"; ndlCol = C(RGB_GREEN); }
+  else if (ndl <= 0.0f)    { ndlTxt = "需减压"; ndlCol = C(RGB_RED);   }
+  else if (ndl < 5)        { static char tb[16]; snprintf(tb, sizeof(tb), "%.0f分", ndl); ndlTxt = tb; ndlCol = C(RGB_RED); }
+  else                     { static char tb[16]; snprintf(tb, sizeof(tb), "%.0f分", ndl); ndlTxt = tb; ndlCol = C(RGB_BLACK); }
+
+  // ===== 数据卡: NDL + Air Time (左右) =====
+  tft.drawFastHLine(0, 135, 320, C(RGB_DARK));
+  tft.drawFastVLine(160, 136, 77, C(RGB_DARK));
+
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  u8g2.drawUTF8(10,  150, "NDL @ 计划");
+  u8g2.drawUTF8(170, 150, "满瓶气量");
+
+  // NDL 数值
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+  u8g2.setForegroundColor(ndlCol);
+  u8g2.drawUTF8(10, 180, ndlTxt);
+  if (ndl <= 0.0f) {
+    u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+    u8g2.setForegroundColor(C(RGB_RED));
+    u8g2.drawUTF8(10, 205, "(超过 NDL 限制)");
+  } else if (ndl >= 99.0f) {
+    u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+    u8g2.setForegroundColor(C(RGB_DARK));
+    u8g2.drawUTF8(10, 205, "安全潜水时长");
+  }
 
   // Air Time @ 该深度
   uint16_t total_L = totalAirL();
   float sacAtDepth = g_sacLmin * (1.0f + g_planDepthM / 10.0f);
-  if (sacAtDepth > 0) {
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+  u8g2.setForegroundColor(C(RGB_BLACK));
+  if (sacAtDepth > 0 && total_L > 0) {
     int airMin = (int)(total_L / sacAtDepth);
     if (airMin > 999) airMin = 999;
-    snprintf(buf, sizeof(buf), "满瓶气量  %d 分钟", airMin);
+    snprintf(buf, sizeof(buf), "%d 分", airMin);
+    u8g2.drawUTF8(170, 180, buf);
   } else {
-    snprintf(buf, sizeof(buf), "满瓶气量  --");
+    u8g2.drawUTF8(170, 180, "--");
   }
-  v4Text(20, 160, buf, C(RGB_BLACK));
-
-  // 提示
-  v4Text(20, 195, "潜前规划工具, 估算该深度安全潜水时长", C(RGB_DARK), u8g2_font_wqy13_t_gb2312);
+  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setForegroundColor(C(RGB_DARK));
+  snprintf(buf, sizeof(buf), "SAC %dL/m × %d 深", g_sacLmin, g_planDepthM);
+  u8g2.drawUTF8(170, 205, buf);
 }
 
 void drawTempChart() {
