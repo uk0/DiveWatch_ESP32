@@ -2254,8 +2254,10 @@ void drawSettings() {
   tft.fillRect(sbX, sbY, 4, sbH, C(RGB_DARK));
   int thumbH = sbH * VISIBLE / SETTINGS_COUNT;
   if (thumbH < 12) thumbH = 12;
-  int thumbY = sbY + (sbH - thumbH) * first / (SETTINGS_COUNT - VISIBLE);
-  if (SETTINGS_COUNT <= VISIBLE) thumbY = sbY;
+  int thumbY = sbY;
+  if (SETTINGS_COUNT > VISIBLE) {   // 防 div by 0
+    thumbY = sbY + (sbH - thumbH) * first / (SETTINGS_COUNT - VISIBLE);
+  }
   tft.fillRect(sbX, thumbY, 4, thumbH, C(RGB_WHITE));
 }
 
@@ -2429,12 +2431,13 @@ void runSelfTest() {
   bool buzzerTested = true;
 
   // 等待按键释放 (容忍开机长按 + 抖动)
+  // 用无符号差分判断超时, 防 millis() 49 天回卷
   auto checkBtnStable = [](uint8_t pin, uint32_t timeoutMs) -> bool {
-    unsigned long deadline = millis() + timeoutMs;
-    unsigned long stableStart = millis();
-    while (millis() < deadline) {
+    uint32_t startMs = millis();
+    uint32_t stableStart = startMs;
+    while ((uint32_t)(millis() - startMs) < timeoutMs) {
       if (digitalRead(pin) == LOW) stableStart = millis();
-      else if (millis() - stableStart >= 500) return true;
+      else if ((uint32_t)(millis() - stableStart) >= 500) return true;
       delay(20);
     }
     return false;
@@ -2786,7 +2789,8 @@ void loop() {
       float pSmooth = pushPressureAndAverage(g_pressureRaw);
       g_depthRaw    = depthFromPressure(g_pressureRaw);
       g_depthSmooth = depthFromPressure(pSmooth);
-      g_ascentMpm   = (g_lastDepth - g_depthSmooth) * 60000.0f / (float)dtMs;
+      // 防 dtMs=0 触发除零 Inf (极端竞态)
+      if (dtMs > 0) g_ascentMpm = (g_lastDepth - g_depthSmooth) * 60000.0f / (float)dtMs;
       g_lastDepth   = g_depthSmooth;
       if (g_depthSmooth > g_maxDepth) g_maxDepth = g_depthSmooth;
       if (g_temp < g_diveMinTemp) g_diveMinTemp = g_temp;
