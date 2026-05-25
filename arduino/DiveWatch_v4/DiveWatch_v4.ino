@@ -861,7 +861,7 @@ void v4DrawFooter(const char *tip) {
   tft.fillRect(0, 210, 320, 30, C(RGB_BLACK));
   u8g2.setBackgroundColor(C(RGB_BLACK));
   u8g2.setForegroundColor(C(RGB_WHITE));
-  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   u8g2.drawUTF8(8, 228, tip);
   u8g2.setBackgroundColor(C(RGB_ORANGE));
   u8g2.setForegroundColor(C(RGB_BLACK));
@@ -1013,7 +1013,7 @@ static void drawTopHeader(const char *title, const char *right = nullptr) {
 static void drawBottomButtonBar(const char *m, const char *up, const char *dn) {
   tft.fillRect(0, 215, 320, 25, C(RGB_BLACK));
   tft.drawFastHLine(0, 214, 320, C(RGB_DARK));
-  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   u8g2.setBackgroundColor(C(RGB_BLACK));
   u8g2.setForegroundColor(C(RGB_WHITE));
   tft.fillCircle(18, 227, 8, C(RGB_DARK));
@@ -1098,7 +1098,7 @@ void drawHudStaticFrame() {
   u8g2.drawUTF8(166, 198, "N2");
   u8g2.drawUTF8(246, 198, "用时");
   // 底栏按键徽章 (圆形 + 字母/三角)
-  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   u8g2.setBackgroundColor(C(RGB_BLACK));
   u8g2.setForegroundColor(C(RGB_WHITE));
   tft.fillCircle(18, 227, 8, C(RGB_DARK));
@@ -1207,7 +1207,7 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
     u8g2.setForegroundColor(C(RGB_BLACK));
     u8g2.drawUTF8(dx + w + 12, 115, "米");
     // 顶部小标签 "深度"
-    u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+    u8g2.setFont(u8g2_font_wqy12_t_gb2312);
     u8g2.drawUTF8(8, 45, "深度");
   }
 
@@ -1217,7 +1217,7 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
   tft.fillRect(0, 132, 320, 32, C(RGB_ORANGE));
 
   // 左侧: NDL 标签 + 大字数字 + 分
-  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   u8g2.setBackgroundColor(C(RGB_ORANGE));
   u8g2.setForegroundColor(C(RGB_BLACK));
   u8g2.drawUTF8(10, 145, "NDL");
@@ -1233,7 +1233,7 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
   // 中部: TTS (上升到水面时间, 仅潜水中显示)
   if (g_diving && depth > 1.0f) {
     float tts = computeTTS(depth);
-    u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+    u8g2.setFont(u8g2_font_wqy12_t_gb2312);
     u8g2.setForegroundColor(C(RGB_BLACK));
     u8g2.drawUTF8(150, 145, "TTS");
     u8g2.setFont(u8g2_font_logisoso24_tn);
@@ -1263,7 +1263,7 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
   if (fabsf(ascentMpm - s_lastAscent) > 0.1f) {
     s_lastAscent = ascentMpm;
     drawAscentBar(40, 172, 240, 12, ascentMpm);
-    u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+    u8g2.setFont(u8g2_font_wqy12_t_gb2312);
     u8g2.setBackgroundColor(C(RGB_ORANGE));
     u8g2.setForegroundColor(C(RGB_BLACK));
     tft.fillRect(0, 170, 38, 16, C(RGB_ORANGE));
@@ -1274,7 +1274,7 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
   }
 
   // ===== 数据条 数值 y=200..212 (标签由 staticFrame 画) =====
-  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   u8g2.setBackgroundColor(C(RGB_ORANGE));
 
   // 最深 (列1: x=0..80, 标签 x=6, 数值 x=36)
@@ -1390,7 +1390,7 @@ void drawProfile(float depth) {
     u8g2.setBackgroundColor(C(RGB_DARK));
     u8g2.setForegroundColor(C(RGB_WHITE));
     u8g2.drawUTF8(100, 110, "尚未开始潜水");
-    u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+    u8g2.setFont(u8g2_font_wqy12_t_gb2312);
     u8g2.drawUTF8(85, 130, "潜入水中后开始记录");
   }
 
@@ -1398,7 +1398,7 @@ void drawProfile(float depth) {
   tft.drawRect(x0, y0, gw, gh, C(RGB_BLACK));
 
   // 底部数据条 (y=198..213)
-  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   u8g2.setBackgroundColor(C(RGB_ORANGE));
   u8g2.setForegroundColor(C(RGB_BLACK));
   snprintf(buf, sizeof(buf), "最深 %.1fm", maxD);
@@ -1473,7 +1473,7 @@ void drawLastDive() {
   DiveRecord &r = g_log[0];
 
   // ===== 中央大字最深深度 (y=38..118) =====
-  u8g2.setFont(u8g2_font_logisoso42_tr);
+  u8g2.setFont(u8g2_font_logisoso50_tn);
   u8g2.setBackgroundColor(C(RGB_ORANGE));
   snprintf(buf, sizeof(buf), "%.1f", r.maxDepth);
   int w = u8g2.getUTF8Width(buf);
@@ -1485,7 +1485,7 @@ void drawLastDive() {
   u8g2.setFont(u8g2_font_wqy16_t_gb2312);
   u8g2.drawUTF8(dx + w + 4, 93, "m");
   // 小标签
-  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   u8g2.setForegroundColor(C(RGB_BLACK));
   u8g2.drawUTF8(135, 108, "最深深度");
 
@@ -1516,7 +1516,7 @@ void drawLastDive() {
   u8g2.drawUTF8(86,  158, "平均");
   u8g2.drawUTF8(166, 158, "最低温");
   u8g2.drawUTF8(246, 158, "电池");
-  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   // 时长
   snprintf(buf, sizeof(buf), "%u:%02u", r.durationSec/60, r.durationSec%60);
   u8g2.drawUTF8(8, 180, buf);
@@ -1535,10 +1535,10 @@ void drawLastDive() {
   u8g2.drawUTF8(246, 180, buf);
 
   // ===== 备注行 (y=192..210) =====
-  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   u8g2.setForegroundColor(C(RGB_BLACK));
   // 海/淡 徽章
-  drawBadge(8, 192, 42, 18, C(RGB_DARK), C(RGB_WHITE), r.saltwater ? "海水" : "淡水", u8g2_font_wqy13_t_gb2312);
+  drawBadge(8, 192, 42, 18, C(RGB_DARK), C(RGB_WHITE), r.saltwater ? "海水" : "淡水", u8g2_font_wqy12_t_gb2312);
   u8g2.setBackgroundColor(C(RGB_ORANGE));
   if (r.airUsedL > 1.0f) {
     snprintf(buf, sizeof(buf), "耗气 %.0fL", r.airUsedL);
@@ -1587,7 +1587,7 @@ void drawLogList() {
   u8g2.drawUTF8(90, 75, buf);
   u8g2.setForegroundColor(C(RGB_BLACK));
   u8g2.drawUTF8(88, 73, buf);
-  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   u8g2.drawUTF8(170, 67, "最深");
   u8g2.drawUTF8(170, 82, "(m)");
 
@@ -1596,16 +1596,16 @@ void drawLogList() {
   snprintf(buf, sizeof(buf), "%u:%02u", r.durationSec/60, r.durationSec%60);
   u8g2.setForegroundColor(C(RGB_BLACK));
   u8g2.drawUTF8(215, 70, buf);
-  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   u8g2.drawUTF8(280, 82, "时长");
 
   // ===== 分隔线 + 海/淡 徽章 (y=100) =====
   tft.drawFastHLine(0, 102, 320, C(RGB_DARK));
-  drawBadge(10, 108, 42, 18, C(RGB_DARK), C(RGB_WHITE), r.saltwater ? "海水" : "淡水", u8g2_font_wqy13_t_gb2312);
+  drawBadge(10, 108, 42, 18, C(RGB_DARK), C(RGB_WHITE), r.saltwater ? "海水" : "淡水", u8g2_font_wqy12_t_gb2312);
   u8g2.setBackgroundColor(C(RGB_ORANGE));
 
   // ===== 中部: 详情 2x2 网格 (y=130..210) =====
-  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   u8g2.setForegroundColor(C(RGB_BLACK));
   // 平均深度
   if (r.avgDepth > 0.1f) {
@@ -1691,7 +1691,7 @@ void drawAir() {
   u8g2.drawUTF8(260 - wn/2, 87, buf);
 
   // ===== 中央大字气压 (x=70..210 y=45..115) =====
-  u8g2.setFont(u8g2_font_logisoso42_tr);
+  u8g2.setFont(u8g2_font_logisoso50_tn);
   snprintf(buf, sizeof(buf), "%d", (int)remainingBar);
   int w = u8g2.getUTF8Width(buf);
   int dx = 140 - w / 2;
@@ -1707,7 +1707,7 @@ void drawAir() {
   u8g2.drawUTF8(dx + w + 4, 105, "bar");
 
   // ===== 起始 / 用量 (y=128) =====
-  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   u8g2.setForegroundColor(C(RGB_BLACK));
   snprintf(buf, sizeof(buf), "起始 %d", g_initialBar);
   u8g2.drawUTF8(72, 130, buf);
@@ -1750,7 +1750,7 @@ void drawAir() {
   u8g2.drawUTF8(246, 190, "气体");
 
   // 数值
-  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   // AirTime
   if (airMin >= 0) snprintf(buf, sizeof(buf), "%d 分", airMin);
   else             snprintf(buf, sizeof(buf), "--");
@@ -1788,7 +1788,7 @@ void drawN2() {
   int w = u8g2.getUTF8Width(buf);
   u8g2.setForegroundColor(loadCol);
   u8g2.drawUTF8(80 - w/2, 102, buf);
-  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   u8g2.setForegroundColor(C(RGB_BLACK));
   u8g2.drawUTF8(67, 118, "% 负荷");
 
@@ -1799,7 +1799,7 @@ void drawN2() {
   // 最快/最慢组织室 (柱状对比)
   float fastSat = computeSaturationPct(0,  g_depthSmooth);
   float slowSat = computeSaturationPct(15, g_depthSmooth);
-  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   u8g2.setForegroundColor(C(RGB_BLACK));
   snprintf(buf, sizeof(buf), "最快 %.0f%%", fastSat);
   u8g2.drawUTF8(170, 95, buf);
@@ -1867,7 +1867,7 @@ void drawPlan() {
   u8g2.drawUTF8(dx + w + 4, 105, "m");
 
   // 标签
-  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   u8g2.setForegroundColor(C(RGB_BLACK));
   u8g2.drawUTF8(125, 120, "计划深度");
 
@@ -1894,11 +1894,11 @@ void drawPlan() {
   u8g2.setForegroundColor(ndlCol);
   u8g2.drawUTF8(10, 180, ndlTxt);
   if (ndl <= 0.0f) {
-    u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+    u8g2.setFont(u8g2_font_wqy12_t_gb2312);
     u8g2.setForegroundColor(C(RGB_RED));
     u8g2.drawUTF8(10, 205, "(超过 NDL 限制)");
   } else if (ndl >= 99.0f) {
-    u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+    u8g2.setFont(u8g2_font_wqy12_t_gb2312);
     u8g2.setForegroundColor(C(RGB_BLACK));
     u8g2.drawUTF8(10, 205, "安全潜水时长");
   }
@@ -1916,7 +1916,7 @@ void drawPlan() {
   } else {
     u8g2.drawUTF8(170, 180, "--");
   }
-  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   u8g2.setForegroundColor(C(RGB_BLACK));
   snprintf(buf, sizeof(buf), "SAC %dL/m × %d 深", g_sacLmin, g_planDepthM);
   u8g2.drawUTF8(170, 205, buf);
@@ -1945,9 +1945,9 @@ void drawTempChart() {
 
   // Y 轴标签
   snprintf(buf, sizeof(buf), "%.1f", maxT);
-  v4Text(5, 60, buf, C(RGB_BLACK), u8g2_font_wqy13_t_gb2312);
+  v4Text(5, 60, buf, C(RGB_BLACK), u8g2_font_wqy12_t_gb2312);
   snprintf(buf, sizeof(buf), "%.1f", minT);
-  v4Text(5, 195, buf, C(RGB_BLACK), u8g2_font_wqy13_t_gb2312);
+  v4Text(5, 195, buf, C(RGB_BLACK), u8g2_font_wqy12_t_gb2312);
 
   // 绘图区 x=50-310 y=50-200 (260x150)
   int x0 = 50, y0 = 50, gw = 260, gh = 150;
@@ -2012,9 +2012,9 @@ void drawBatHist() {
 
   // Y 轴标签
   snprintf(buf, sizeof(buf), "%.2f", maxV);
-  v4Text(5, 60, buf, C(RGB_BLACK), u8g2_font_wqy13_t_gb2312);
+  v4Text(5, 60, buf, C(RGB_BLACK), u8g2_font_wqy12_t_gb2312);
   snprintf(buf, sizeof(buf), "%.2f", minV);
-  v4Text(5, 195, buf, C(RGB_BLACK), u8g2_font_wqy13_t_gb2312);
+  v4Text(5, 195, buf, C(RGB_BLACK), u8g2_font_wqy12_t_gb2312);
 
   // 绘图区 x=50-310 y=50-200
   int x0 = 50, y0 = 50, gw = 260, gh = 150;
@@ -2428,7 +2428,7 @@ void drawFullScreenAlarm(uint8_t type, float depth, float ndl, float ascentMpm) 
   w = u8g2.getUTF8Width(action);
   u8g2.drawUTF8(160 - w/2, 160, action);
   // 底部提示
-  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   u8g2.drawUTF8(70, 215, "按 M 键暂停告警 60 秒");
 }
 
@@ -2451,7 +2451,7 @@ void drawDiveEnter() {
   // 实际大字效果用 logisoso28 + 中文字描述
   u8g2.setFont(u8g2_font_logisoso28_tn);
   u8g2.drawUTF8(140, 140, "GO!");
-  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   u8g2.drawUTF8(100, 175, "祝你潜水愉快, 注意安全");
 }
 
@@ -2468,13 +2468,13 @@ void drawDiveExitSummary() {
   u8g2.setBackgroundColor(C(RGB_ORANGE));
   u8g2.setForegroundColor(C(RGB_BLACK));
   char buf[40];
-  u8g2.setFont(u8g2_font_logisoso42_tr);
+  u8g2.setFont(u8g2_font_logisoso50_tn);
   snprintf(buf, sizeof(buf), "%.1f", g_diveExitMaxDepth);
   int w = u8g2.getUTF8Width(buf);
   u8g2.drawUTF8(160 - w/2 - 6, 95, buf);
   u8g2.setFont(u8g2_font_wqy16_t_gb2312);
   u8g2.drawUTF8(160 - w/2 + w/2 - 5 + w/2 - w/2 + 8, 100, "m");
-  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   int lblW = u8g2.getUTF8Width("最深深度");
   u8g2.drawUTF8(160 - lblW/2, 115, "最深深度");
   // 数据条 2x2
@@ -2496,7 +2496,7 @@ void drawDiveExitSummary() {
   u8g2.drawUTF8(225, 197, g_fluidDensity > 1010 ? "海水" : "淡水");
   // 底部
   tft.fillRect(0, 215, 320, 25, C(RGB_BLACK));
-  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   u8g2.setBackgroundColor(C(RGB_BLACK));
   u8g2.setForegroundColor(C(RGB_WHITE));
   u8g2.drawUTF8(80, 232, "按任意键回到主屏");
@@ -2531,7 +2531,7 @@ void otaDrawScreen(const char *line1, const char *line2, int pct) {
     u8g2.drawUTF8(160 - pw/2, by + bh + 18, pbuf);
   }
   // 底部提示
-  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   u8g2.setForegroundColor(C(RGB_WHITE));
   u8g2.drawUTF8(40, 220, "BLE 设备: DiveWatch-OTA");
 }
@@ -2540,7 +2540,7 @@ void drawSplash() {
   tft.fillScreen(C(RGB_ORANGE));
 
   // 大字标题
-  u8g2.setFont(u8g2_font_logisoso26_tn);
+  u8g2.setFont(u8g2_font_logisoso24_tn);
   u8g2.setForegroundColor(C(RGB_BLACK));
   u8g2.setBackgroundColor(C(RGB_ORANGE));
   // 用中文字体显示
@@ -3176,7 +3176,7 @@ void loop() {
       u8g2.drawUTF8(160 - w/2, 130, buf);
       // 电量
       char b2[16]; snprintf(b2, sizeof(b2), "%d%%", g_batPct);
-      u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+      u8g2.setFont(u8g2_font_wqy12_t_gb2312);
       u8g2.setForegroundColor(g_batPct < 20 ? C(RGB_RED) : C(RGB_WHITE));
       int w2 = u8g2.getUTF8Width(b2);
       u8g2.drawUTF8(160 - w2/2, 165, b2);

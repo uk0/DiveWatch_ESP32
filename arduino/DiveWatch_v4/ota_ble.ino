@@ -1,45 +1,7 @@
 // =====================================================================
-// 刷不死方案 v2: BLE 配 WiFi → WiFi OTA (高速 + 远程)
+// 刷不死方案 v3: NimBLE 配 WiFi + WiFi OTA (节省 ~150KB Flash)
 // =====================================================================
-// 流程:
-//   1) 设备进入 OTA 模式 (任一方式触发)
-//   2) BLE 广播 "DiveWatch-OTA", 用户手机/浏览器连接
-//   3) 通过 BLE 写 WiFi SSID + PSK + "CONNECT" 命令
-//   4) 设备连 WiFi → 显示 IP → 启动 ArduinoOTA (端口 3232)
-//   5) 用户用 espota.py 或 Arduino IDE 推送固件 (WiFi 速度 ~500KB/s)
-//   6) 固件完成后自动重启, 新固件 5s 后 mark_valid (失败自动回滚)
-//
-// 触发方式 (任一):
-//   1) 长按 MODE+UP 3 秒
-//   2) 开机时按住 UP+DOWN (救援模式, 主固件 brick 也能用)
-//   3) NVS magic flag
-//
-// BLE GATT 协议:
-//   Service: 1d14d6ee-fd63-4fa1-bfa4-8f47b42119f0
-//   SSID:    f7bf3564-...  (Write, UTF-8 字符串)
-//   PSK:     984227f3-...  (Write, UTF-8 字符串)
-//   CMD:     0c533cef-...  (Write, 1 字节命令)
-//              'C' = CONNECT (用 SSID+PSK 连 WiFi)
-//              'F' = FORGET  (清除 NVS WiFi 凭据)
-//              'R' = REBOOT  (重启回主固件)
-//   STAT:    3b1f9c5e-...  (Notify, UTF-8 状态字符串)
-//              "WIFI_CONNECTING"
-//              "WIFI_OK 192.168.1.50"
-//              "WIFI_FAIL"
-//              "OTA_READY"  (ArduinoOTA 服务已启动)
-//              "OTA_PROGRESS 45"
-//              "OTA_END"
-//
-// WiFi OTA 命令 (用户在 PC 上):
-//   arduino-cli upload -p IP_ADDR -i IP_ADDR ...
-//   或:
-//   espota.py -i 192.168.1.50 -p 3232 -f DiveWatch_v4.ino.bin
-// =====================================================================
-
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
-#include <BLE2902.h>
+#include <NimBLEDevice.h>
 #include <WiFi.h>
 #include <ArduinoOTA.h>
 #include <Update.h>
@@ -58,12 +20,11 @@ String   g_otaSsid      = "";
 String   g_otaPsk       = "";
 String   g_otaIp        = "";
 int      g_otaProgress  = 0;
-BLECharacteristic *g_otaStatCh = nullptr;
+NimBLECharacteristic *g_otaStatCh = nullptr;
 
 // 由主 sketch 提供
 void otaDrawScreen(const char *line1, const char *line2, int pct);
 
-// ---------------- 工具: 状态通知 ----------------
 static void otaNotify(const char *msg) {
   Serial.printf("[OTA] %s\n", msg);
   if (g_otaStatCh) {
@@ -97,7 +58,7 @@ static void otaForgetWifiCreds() {
   }
 }
 
-// ---------------- WiFi 连接 + 启动 ArduinoOTA ----------------
+// ---------------- WiFi + ArduinoOTA ----------------
 static void otaStartWifiOTA() {
   otaNotify("WIFI_CONNECTING");
   otaDrawScreen("连接 WiFi", g_otaSsid.c_str(), 0);
@@ -118,15 +79,10 @@ static void otaStartWifiOTA() {
   String msg = "WIFI_OK " + g_otaIp;
   otaNotify(msg.c_str());
 
-  // 保存凭据
   otaSaveWifiCreds(g_otaSsid, g_otaPsk);
 
-  // 启动 ArduinoOTA
   ArduinoOTA.setHostname("DiveWatch");
   ArduinoOTA.setPort(3232);
-  // 无密码, 局域网内任何人可推 (内网信任) - 加密码改为:
-  // ArduinoOTA.setPassword("yourpass");
-
   ArduinoOTA.onStart([]() {
     g_otaRunning = true;
     g_otaProgress = 0;
@@ -161,23 +117,23 @@ static void otaStartWifiOTA() {
   otaDrawScreen("OTA 已就绪", ipLine, 0);
 }
 
-// ---------------- BLE 回调 ----------------
-class SsidCb : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic *c) override {
-    g_otaSsid = c->getValue();
+// ---------------- NimBLE 回调 ----------------
+class SsidCb : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &info) override {
+    g_otaSsid = String(c->getValue().c_str());
     Serial.printf("[OTA] SSID=%s\n", g_otaSsid.c_str());
   }
 };
-class PskCb : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic *c) override {
-    g_otaPsk = c->getValue();
+class PskCb : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &info) override {
+    g_otaPsk = String(c->getValue().c_str());
     Serial.println("[OTA] PSK received");
   }
 };
-class CmdCb : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic *c) override {
-    String v = c->getValue();
-    if (v.length() == 0) return;
+class CmdCb : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &info) override {
+    std::string v = c->getValue();
+    if (v.empty()) return;
     char cmd = v[0];
     if (cmd == 'C') {
       if (g_otaSsid.length() == 0) { otaNotify("ERR_NO_SSID"); return; }
@@ -192,10 +148,14 @@ class CmdCb : public BLECharacteristicCallbacks {
     }
   }
 };
-class SrvCb : public BLEServerCallbacks {
-  void onConnect(BLEServer *) override     { Serial.println("[OTA] BLE connected"); }
-  void onDisconnect(BLEServer *s) override { Serial.println("[OTA] BLE disconnected");
-                                             s->startAdvertising(); }
+class SrvCb : public NimBLEServerCallbacks {
+  void onConnect(NimBLEServer *, NimBLEConnInfo &info) override {
+    Serial.println("[OTA] BLE connected");
+  }
+  void onDisconnect(NimBLEServer *s, NimBLEConnInfo &info, int reason) override {
+    Serial.printf("[OTA] BLE disconnected, reason=%d\n", reason);
+    NimBLEDevice::startAdvertising();
+  }
 };
 
 // ---------------- 公共 API ----------------
@@ -203,32 +163,30 @@ void otaStartBLE() {
   if (g_otaMode) return;
   g_otaMode = true;
 
-  // 仅启动 BLE 服务等待用户命令; 自动 WiFi 连接由用户触发 (避免 setup 早期 block 20s)
-  BLEDevice::init("DiveWatch-OTA");
-  BLEDevice::setMTU(247);
-  BLEServer *srv = BLEDevice::createServer();
+  NimBLEDevice::init("DiveWatch-OTA");
+  NimBLEDevice::setMTU(247);
+  NimBLEServer *srv = NimBLEDevice::createServer();
   srv->setCallbacks(new SrvCb());
-  BLEService *svc = srv->createService(OTA_SVC_UUID);
+  NimBLEService *svc = srv->createService(OTA_SVC_UUID);
 
-  auto ssidCh = svc->createCharacteristic(OTA_SSID_UUID, BLECharacteristic::PROPERTY_WRITE);
+  auto ssidCh = svc->createCharacteristic(OTA_SSID_UUID, NIMBLE_PROPERTY::WRITE);
   ssidCh->setCallbacks(new SsidCb());
-  auto pskCh = svc->createCharacteristic(OTA_PSK_UUID, BLECharacteristic::PROPERTY_WRITE);
+  auto pskCh = svc->createCharacteristic(OTA_PSK_UUID, NIMBLE_PROPERTY::WRITE);
   pskCh->setCallbacks(new PskCb());
-  auto cmdCh = svc->createCharacteristic(OTA_CMD_UUID, BLECharacteristic::PROPERTY_WRITE);
+  auto cmdCh = svc->createCharacteristic(OTA_CMD_UUID, NIMBLE_PROPERTY::WRITE);
   cmdCh->setCallbacks(new CmdCb());
-  g_otaStatCh = svc->createCharacteristic(OTA_STAT_UUID, BLECharacteristic::PROPERTY_NOTIFY);
-  g_otaStatCh->addDescriptor(new BLE2902());
+  g_otaStatCh = svc->createCharacteristic(OTA_STAT_UUID, NIMBLE_PROPERTY::NOTIFY);
 
   svc->start();
-  auto adv = BLEDevice::getAdvertising();
+  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
   adv->addServiceUUID(OTA_SVC_UUID);
-  adv->setScanResponse(true);
+  adv->enableScanResponse(true);
   adv->start();
 
   Serial.println("[OTA] BLE advertising as 'DiveWatch-OTA'");
   otaDrawScreen("OTA 模式", "BLE 配 WiFi 中...", 0);
 
-  // BLE 启动后尝试自动连上次保存的 WiFi (非阻塞: 5s timeout)
+  // 自动尝试连上次保存的 WiFi
   String savedSsid, savedPsk;
   if (otaLoadWifiCreds(savedSsid, savedPsk)) {
     g_otaSsid = savedSsid;
@@ -240,12 +198,9 @@ void otaStartBLE() {
 
 void otaLoopTick() {
   if (!g_otaMode) return;
-  if (g_otaWifiOk) {
-    ArduinoOTA.handle();
-  }
+  if (g_otaWifiOk) ArduinoOTA.handle();
 }
 
-// ---------------- 主程序 hooks ----------------
 bool otaCheckMagicFlag() {
   Preferences p;
   if (!p.begin("ota", true)) return false;
@@ -282,7 +237,6 @@ void otaMarkValidIfReady() {
   }
 }
 
-// 开机按 UP+DOWN → 救援模式
 bool otaCheckBootRecovery() {
   pinMode(BTN_UP_PIN, INPUT_PULLUP);
   pinMode(BTN_DOWN_PIN, INPUT_PULLUP);
