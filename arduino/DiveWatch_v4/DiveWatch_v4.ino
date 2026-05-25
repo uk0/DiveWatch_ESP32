@@ -110,6 +110,7 @@ struct DiveRecord {
 #define BTN_UP_PIN     7
 #define BTN_DOWN_PIN  10
 #define BAT_ADC_PIN    1     // board pin "A0", reads battery via 2:1 divider
+#define TFT_BL_PIN     8     // 屏幕背光控制 (Nano D5), HIGH=亮 LOW=灭
 
 // Voltage divider: BAT+ -[R1]- ADC -[R2]- GND
 // 理想情况 R1=R2 时 BAT_DIVIDER = 2.0, 但 ±5% 精度下实际 1.9-2.1
@@ -2701,17 +2702,21 @@ void enterDeepSleep() {
   tft.fillScreen(C(RGB_BLACK));
   u8g2.setBackgroundColor(C(RGB_BLACK));
   u8g2.setForegroundColor(C(RGB_ORANGE));
-  u8g2.setFont(u8g2_font_logisoso28_tn);
-  u8g2.drawUTF8(60, 90, "0FF");
   u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+  u8g2.drawUTF8(110, 100, "已关机");
   u8g2.setForegroundColor(C(RGB_WHITE));
-  u8g2.drawUTF8(60, 140, "正在关机...");
-  u8g2.drawUTF8(40, 170, "长按 MODE 2 秒开机");
-  u8g2.setForegroundColor(C(RGB_ORANGE));
-  u8g2.drawUTF8(80, 210, "Deep Sleep ~10uA");
+  u8g2.drawUTF8(60, 140, "长按 MODE 2 秒开机");
 
   beepBlocking(3, 250, 150);
-  delay(800);
+  delay(600);
+
+  // ST7789 进 sleep: 关显示 + 振荡器, 再关背光
+  tft.fillScreen(C(RGB_BLACK));
+  tft.writeCommand(0x28);   // DISPOFF
+  tft.writeCommand(0x10);   // SLPIN
+  delay(120);
+  digitalWrite(TFT_BL_PIN, LOW);    // 关背光
+  pinMode(TFT_BL_PIN, INPUT);       // 高阻, deep sleep 不漏电
 
   // 关 OLED + WiFi
   // tft.sleepMode (no-op v4)
@@ -2840,6 +2845,10 @@ void setup() {
   Wire.begin(I2C_SDA, I2C_SCL);
   Wire.setClock(400000);
   Serial.println("[BOOT] I2C init done");
+
+  // ---- 屏幕背光: 默认亮 ----
+  pinMode(TFT_BL_PIN, OUTPUT);
+  digitalWrite(TFT_BL_PIN, HIGH);
 
   // ---- ST7789 SPI 显示初始化 ----
   mySPI.begin(TFT_SCK, -1, TFT_MOSI, TFT_CS);
@@ -3048,7 +3057,7 @@ void loop() {
     g_lastInteractMs = now;
     if (g_screenOff) {
       g_screenOff = false;
-      // tft.enableDisplay (no-op v4)
+      digitalWrite(TFT_BL_PIN, HIGH);       // 开背光
       setCpuFrequencyMhz(CPU_FREQ_ACTIVE);  // 唤醒回 240MHz
       Serial.println("[POWER] CPU 240MHz / OLED on");
       // Consume the wake-up button event (don't trigger an action)
@@ -3062,9 +3071,9 @@ void loop() {
   if (!g_screenOff && !g_editingTime && !g_diving &&
       (now - g_lastInteractMs > g_screenOffMs)) {
     g_screenOff = true;
-    // tft.sleepMode (no-op v4)
+    digitalWrite(TFT_BL_PIN, LOW);         // 关背光 (~40mA)
     setCpuFrequencyMhz(CPU_FREQ_IDLE);     // 降 80MHz 省电 ~30%
-    Serial.println("[POWER] CPU 80MHz / OLED off");
+    Serial.println("[POWER] CPU 80MHz / BL off");
   }
 
   // ---- Battery (every 5s) ----
