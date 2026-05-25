@@ -203,7 +203,7 @@ bool     g_pageDirty       = true;        // 切页或首次进入, 触发静态
 // Settings menu state
 bool     g_inSettings        = false;
 uint8_t  g_settingsItem      = 0;
-static const uint8_t SETTINGS_COUNT = 13;
+static const uint8_t SETTINGS_COUNT = 14;
 
 // Lifetime stats (separate from per-dive log, also in NVS)
 uint32_t g_lifetimeUnderwaterSec = 0;
@@ -2154,6 +2154,7 @@ const char* settingsItemName(uint8_t i) {
     case 10: return "低温报警";
     case 11: return "电池校准";
     case 12: return "下降警告";
+    case 13: return "▶ 进入 OTA";
   }
   return "?";
 }
@@ -2173,6 +2174,7 @@ void settingsItemValue(uint8_t i, char *buf, size_t sz) {
     case 10: snprintf(buf, sz, "%u 度", g_lowTempC); break;
     case 11: snprintf(buf, sz, "%.2f", g_batDivider); break;
     case 12: snprintf(buf, sz, "%.0f米/分", g_descentLimit); break;
+    case 13: snprintf(buf, sz, "▲↑ 确认");  break;
   }
 }
 
@@ -2237,6 +2239,12 @@ void settingsItemAdjust(uint8_t i, int delta) {
     }
     case 12: {  // 下降警告 10-30 m/min 步 2
       g_descentLimit = constrain(g_descentLimit + delta * 2.0f, 10.0f, 30.0f);
+      break;
+    }
+    case 13: {  // 进入 OTA: 按 UP/DOWN (delta 任意) 立刻触发
+      Serial.println("[OTA] settings menu → BLE OTA");
+      beepBlocking(3, 100);
+      otaScheduleNextBoot();   // 写 NVS flag + 重启 → OTA 模式
       break;
     }
   }
@@ -2505,12 +2513,21 @@ void drawDiveExitSummary() {
 // ========== OTA 模式 UI (由 ota_ble.ino 调用) ==========
 void otaDrawScreen(const char *line1, const char *line2, int pct) {
   tft.fillScreen(C(RGB_BLACK));
-  // 顶部标题
-  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+  // 顶部红色横条 + 大字 "OTA UPDATE"
+  tft.fillRect(0, 0, 320, 48, C(RGB_RED));
+  u8g2.setFont(u8g2_font_logisoso28_tn);
+  u8g2.setBackgroundColor(C(RGB_RED));
+  u8g2.setForegroundColor(C(RGB_WHITE));
+  // logisoso28 仅数字, 改用 Adafruit GFX 内置英文字体画 "OTA UPDATE"
+  // 注意 invertDisplay 翻转: C(RGB_BLACK) → 屏幕实际显示白色
+  tft.setTextColor(C(RGB_BLACK));   // 显示白色
+  tft.setTextSize(4);
+  // text size 4 = 6×8 × 4 = 24×32 像素, "OTA UPDATE" 10 字符 = 240px 宽
+  // 居中: (320 - 240) / 2 = 40
+  tft.setCursor(40, 8);
+  tft.print("OTA UPDATE");
+  // 主信息行 (中央)
   u8g2.setBackgroundColor(C(RGB_BLACK));
-  u8g2.setForegroundColor(C(RGB_RED));
-  u8g2.drawUTF8(80, 30, "🔄 BLE OTA 模式");
-  // 主信息行 (中央大字)
   u8g2.setForegroundColor(C(RGB_WHITE));
   u8g2.setFont(u8g2_font_logisoso24_tn);
   int w1 = u8g2.getUTF8Width(line1 ? line1 : "");
@@ -2533,7 +2550,7 @@ void otaDrawScreen(const char *line1, const char *line2, int pct) {
   // 底部提示
   u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   u8g2.setForegroundColor(C(RGB_WHITE));
-  u8g2.drawUTF8(40, 220, "BLE 设备: DiveWatch-OTA");
+  u8g2.drawUTF8(60, 230, "BLE: DiveWatch-OTA");
 }
 
 void drawSplash() {
@@ -2863,17 +2880,65 @@ void loop() {
   }
   if (g_btnMode.stable) s_shutdownArmed = false;  // 松手重置
 
-  // ---- 长按 MODE + UP 同时 3 秒 → 进入 BLE OTA 模式 ----
-  static uint32_t s_otaArmStart = 0;
-  if (!g_btnMode.stable && !g_btnUp.stable) {
-    if (s_otaArmStart == 0) s_otaArmStart = now;
-    if (now - s_otaArmStart > 3000 && !g_editingTime && !g_inSettings) {
-      Serial.println("[ACTION] MODE+UP 3s → schedule BLE OTA boot");
-      beepBlocking(3, 100);
-      otaScheduleNextBoot();   // 写 NVS flag + 重启 → 救援模式启动
+  // ---- OTA 触发: 3 种方式 ----
+  //  1) 长按 UP 5 秒  2) 长按 DOWN 5 秒  3) 串口发 "OTA\n"
+  static uint32_t s_otaUpStart = 0;
+  static uint32_t s_otaDnStart = 0;
+  static uint32_t s_otaLogMs = 0;
+
+  bool upHeld   = !g_btnUp.stable;
+  bool downHeld = !g_btnDown.stable;
+
+  if (upHeld) {
+    if (s_otaUpStart == 0) {
+      s_otaUpStart = now;
+      Serial.println("[OTA] UP pressed");
     }
   } else {
-    s_otaArmStart = 0;
+    if (s_otaUpStart != 0) Serial.println("[OTA] UP released");
+    s_otaUpStart = 0;
+  }
+  if (downHeld) {
+    if (s_otaDnStart == 0) {
+      s_otaDnStart = now;
+      Serial.println("[OTA] DOWN pressed");
+    }
+  } else {
+    if (s_otaDnStart != 0) Serial.println("[OTA] DOWN released");
+    s_otaDnStart = 0;
+  }
+
+  if (now - s_otaLogMs > 1000) {
+    s_otaLogMs = now;
+    if (s_otaUpStart > 0)
+      Serial.printf("[OTA] UP held %lums\n", (unsigned long)(now - s_otaUpStart));
+    if (s_otaDnStart > 0)
+      Serial.printf("[OTA] DOWN held %lums\n", (unsigned long)(now - s_otaDnStart));
+  }
+
+  bool triggerOTA = false;
+  if (s_otaUpStart > 0 && now - s_otaUpStart > 5000) triggerOTA = true;
+  if (s_otaDnStart > 0 && now - s_otaDnStart > 5000) triggerOTA = true;
+
+  // 串口命令触发: 发 "OTA\n" 即可 (最可靠, 绕过按键)
+  while (Serial.available()) {
+    static String cmdBuf = "";
+    char c = Serial.read();
+    if (c == '\n' || c == '\r') {
+      if (cmdBuf.equalsIgnoreCase("OTA")) {
+        Serial.println("[OTA] serial cmd OTA → trigger");
+        triggerOTA = true;
+      }
+      cmdBuf = "";
+    } else if (cmdBuf.length() < 16) {
+      cmdBuf += c;
+    }
+  }
+
+  if (triggerOTA && !g_editingTime && !g_inSettings) {
+    Serial.println("[ACTION] → schedule BLE OTA boot");
+    beepBlocking(3, 100);
+    otaScheduleNextBoot();
   }
 
   // ---- OTA 标记 valid (启动 5s 后, 防止误回滚) ----
