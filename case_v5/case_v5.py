@@ -81,9 +81,9 @@ CORNER_R   = 4.0
 # PCB 周边: WALL(2.5) + SEAL_INSET(2) + SEAL_GROOVE_W(3) + 余量(0.5) = 8mm
 CASE_W     = PCB_W + 2 * (WALL + 4.0)             # 45 + 13 = 58
 CASE_H     = PCB_H + 2 * (WALL + 4.0)             # 73.5 + 13 = 86.5
-CASE_Z     = 44.4                                  # 用户指定厚度
-TOP_THICK  = 3.5                                   # 顶盖厚 (含屏幕沉槽)
-BOT_THICK  = CASE_Z - TOP_THICK                    # 下底厚
+CASE_Z     = 44.4                                  # 用户指定总厚度
+TOP_THICK  = 5.0                                   # 顶盖加厚 (3.5→5.0, 防 PCB pocket + FPC 槽 + lip 相交切穿)
+BOT_THICK  = CASE_Z - TOP_THICK                    # 下底厚 = 39.4
 
 # ============================================================
 # 防水密封: 上下盖凹凸契合结构 + O 圈
