@@ -1089,6 +1089,12 @@ void drawHudStaticFrame() {
   tft.drawFastVLine(80,  187, 27, C(RGB_BLACK));
   tft.drawFastVLine(160, 187, 27, C(RGB_BLACK));
   tft.drawFastVLine(240, 187, 27, C(RGB_BLACK));
+  // 顶栏静态文本: AIR (黑底白字, 不随帧刷新)
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+  u8g2.setBackgroundColor(C(RGB_BLACK));
+  u8g2.setForegroundColor(C(RGB_WHITE));
+  u8g2.drawUTF8(196, 21, "AIR");
+
   // 数据条标签 (12px, 纯黑无阴影)
   u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   u8g2.setBackgroundColor(C(RGB_ORANGE));
@@ -1144,22 +1150,24 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
     u8g2.drawUTF8(6, 21, buf);
   }
 
-  // 模式 + 用时 (中, 持续变化每帧重画)
-  tft.fillRect(62, 0, 130, 28, C(RGB_BLACK));
-  if (g_diving) {
-    // DIVE 状态: 红字突出 (生命安全相关)
-    snprintf(buf, sizeof(buf), "DIVE %lu:%02lu",
-             (unsigned long)(diveSec/60), (unsigned long)(diveSec%60));
-    u8g2.setForegroundColor(C(RGB_RED));
-  } else {
-    strcpy(buf, "水面");
-    u8g2.setForegroundColor(C(RGB_WHITE));
+  // 模式 + 用时 (中, 仅状态或秒变化时重画 - 避免 100ms 全帧 fillRect 闪烁)
+  static uint32_t s_lastDiveSecShown = 0xFFFFFFFFU;
+  if ((g_diving != s_lastDiving) || (g_diving && diveSec != s_lastDiveSecShown)) {
+    s_lastDiving = g_diving;
+    s_lastDiveSecShown = diveSec;
+    tft.fillRect(62, 0, 130, 28, C(RGB_BLACK));
+    if (g_diving) {
+      snprintf(buf, sizeof(buf), "DIVE %lu:%02lu",
+               (unsigned long)(diveSec/60), (unsigned long)(diveSec%60));
+      u8g2.setForegroundColor(C(RGB_RED));
+    } else {
+      strcpy(buf, "水面");
+      u8g2.setForegroundColor(C(RGB_WHITE));
+    }
+    u8g2.drawUTF8(66, 21, buf);
   }
-  u8g2.drawUTF8(66, 21, buf);
 
-  // AIR (右-1) — 白字
-  u8g2.setForegroundColor(C(RGB_WHITE));
-  u8g2.drawUTF8(196, 21, "AIR");
+  // AIR 已移到 drawHudStaticFrame, 这里不画 (避免每帧 SPI 写)
 
   // 电量 % (右-2) — 仅 <20% 红, 否则白
   if (g_batPct != s_lastBatPct) {
@@ -1277,8 +1285,8 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
   s_lastNdlRing = ndl;  // 仍然更新 (避免外部条件触发)
   skip_ndl_block:;
 
-  // ===== 上升速度彩条 y=170..184 =====
-  if (fabsf(ascentMpm - s_lastAscent) > 0.1f) {
+  // ===== 上升速度彩条 y=170..184 (阈值放宽 0.5 m/min 减少闪烁) =====
+  if (fabsf(ascentMpm - s_lastAscent) > 0.5f) {
     s_lastAscent = ascentMpm;
     drawAscentBar(40, 172, 240, 12, ascentMpm);
     u8g2.setFont(u8g2_font_wqy12_t_gb2312);
