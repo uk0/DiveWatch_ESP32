@@ -26,11 +26,15 @@ SCREEN_W   = 44.0   # 显示区宽 (X)
 SCREEN_H   = 60.6   # 显示区高 (Y)
 SCREEN_T   = 2.5    # 显示区厚
 
-PCB_W      = 45.0   # 屏 PCB 宽
-PCB_H      = 73.5   # 屏 PCB 长
+PCB_W      = 45.0   # 屏 PCB 宽 (X)
+PCB_H      = 73.5   # 屏 PCB 长 (Y)
 PCB_T      = 1.2    # 屏 PCB 厚
-PCB_FLEX_W = 1.3    # 一侧 FPC 排线避让凹槽宽 (沿 PCB 长边)
-PCB_FLEX_SIDE = +1  # +1 = 右侧 (+X), -1 = 左侧 (-X)
+
+# === FPC 排线 / 元件让位 (PCB 短边一端的 6mm 余量内) ===
+# 屏幕 60.6mm 居中, 上下各 6.45mm 余量, 其中一端有元件/连接器需 1.3mm 让位深度
+PCB_FLEX_DEPTH = 1.3            # 元件凸出高度 (比 PCB pocket 再深 1.3mm)
+PCB_FLEX_END   = -1             # -1 = -Y 端 (底端), +1 = +Y 端 (顶端)
+PCB_FLEX_REGION_H = 7.0         # 让位区沿 Y 方向高度 (略大于 6.45 余量)
 
 # 屏幕在 PCB 上居中, 长方向上下各预留 (73.5-60.6)/2 = 6.45 mm
 
@@ -132,17 +136,15 @@ def make_top():
             Rectangle(pcb_pocket_w, pcb_pocket_h)
         extrude(amount=pcb_pocket_d + 0.1, mode=Mode.SUBTRACT)
 
-        # === FPC 排线避让区 (PCB 一侧凸出方槽, 长 35mm 中段) ===
-        # 在 PCB pocket 一侧 (PCB_FLEX_SIDE) 凸出一个 1.7×35mm 矩形, 深更深 (3mm)
-        # 让 FPC 排线从 PCB 边缘弯下连接主控板
-        flex_pocket_d = 3.0     # 凹槽深 (比 PCB pocket 深 1.5mm)
-        flex_pocket_len = 35.0  # 沿 Y 长度
-        flex_pocket_w  = PCB_FLEX_W + 0.4    # 1.7mm
-        flex_cx = PCB_FLEX_SIDE * (pcb_pocket_w / 2 + flex_pocket_w / 2 - 0.2)
-        with BuildSketch(Plane.XY.offset(TOP_THICK - flex_pocket_d)):
-            with Locations((flex_cx, 0)):
-                Rectangle(flex_pocket_w, flex_pocket_len)
-        extrude(amount=flex_pocket_d + 0.1, mode=Mode.SUBTRACT)
+        # === FPC 排线 / 元件让位区 (PCB 短边一端的 6mm 余量内, 加深 1.3mm) ===
+        # 在 PCB pocket 一端 (PCB_FLEX_END = ±1 选 -Y/+Y) 沿宽度方向开整宽方槽
+        # 让 PCB 上的连接器/电容/电阻等元件凸入这个深槽
+        flex_total_depth = pcb_pocket_d + PCB_FLEX_DEPTH    # 1.5 + 1.3 = 2.8mm
+        flex_cy = PCB_FLEX_END * (pcb_pocket_h / 2 - PCB_FLEX_REGION_H / 2)
+        with BuildSketch(Plane.XY.offset(TOP_THICK - flex_total_depth)):
+            with Locations((0, flex_cy)):
+                Rectangle(pcb_pocket_w, PCB_FLEX_REGION_H)
+        extrude(amount=flex_total_depth + 0.1, mode=Mode.SUBTRACT)
 
         # 4 角螺丝沉头孔 (顶面穿到底)
         with BuildSketch():
