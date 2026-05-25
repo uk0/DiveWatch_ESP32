@@ -896,6 +896,18 @@ void v4Text(int x, int y, const char *s, uint16_t color, const uint8_t *font = u
 inline void drawDivider() {
   tft.drawFastHLine(0, 12, 128, C(RGB_BLACK));
 }
+
+// 文字带阴影 (1px 右下偏移 DARK 阴影 + 主色), 模拟反走样减少 1-bit 锯齿
+// 用于大字 + 关键 KPI; setBackgroundColor 必须先设好
+static inline void drawTextWithShadow(int x, int y, const char *s, uint16_t fg, uint16_t shadow) {
+  // 透明模式画阴影, 再画主体
+  u8g2.setFontMode(1);
+  u8g2.setForegroundColor(shadow);
+  u8g2.drawUTF8(x + 1, y + 1, s);
+  u8g2.setForegroundColor(fg);
+  u8g2.drawUTF8(x, y, s);
+  u8g2.setFontMode(0);  // 恢复 solid (后续 setForegroundColor 由调用方负责)
+}
 // ============== v4 HUD - Garmin Descent X50i 风格 (320x240) ==============
 // 布局:
 //   y=0..27   顶栏 (黑底): 状态LED + 时间 + 模式/用时 + 气体 + 电量 + 海/淡
@@ -1016,24 +1028,47 @@ static void drawTopHeader(const char *title, const char *right = nullptr) {
   u8g2.setBackgroundColor(C(RGB_ORANGE));
 }
 
-static void drawBottomButtonBar(const char *m, const char *up, const char *dn) {
+static void drawBottomButtonBar(const char *m, const char *up, const char *dn,
+                                const char *mLong = nullptr,
+                                const char *upLong = nullptr,
+                                const char *dnLong = nullptr) {
   tft.fillRect(0, 215, 320, 25, C(RGB_BLACK));
-  tft.drawFastHLine(0, 214, 320, C(RGB_DARK));
+  tft.fillRect(0, 213, 320, 2, C(RGB_BLACK));
   u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   u8g2.setBackgroundColor(C(RGB_BLACK));
-  u8g2.setForegroundColor(C(RGB_WHITE));
+  // [M]
   tft.fillCircle(18, 227, 8, C(RGB_DARK));
   tft.drawCircle(18, 227, 8, C(RGB_WHITE));
-  u8g2.drawUTF8(14, 232, "M");
+  u8g2.setForegroundColor(C(RGB_WHITE)); u8g2.drawUTF8(14, 232, "M");
   u8g2.drawUTF8(32, 232, m);
+  if (mLong) {
+    int w = u8g2.getUTF8Width(m);
+    u8g2.setForegroundColor(C(RGB_DARK));
+    char b[24]; snprintf(b, sizeof(b), "·%s", mLong);
+    u8g2.drawUTF8(32 + w + 2, 232, b);
+  }
+  // [▼]
   tft.fillCircle(128, 227, 8, C(RGB_DARK));
   tft.drawCircle(128, 227, 8, C(RGB_WHITE));
   tft.fillTriangle(128, 222, 124, 231, 132, 231, C(RGB_WHITE));
-  u8g2.drawUTF8(142, 232, up);
+  u8g2.setForegroundColor(C(RGB_WHITE)); u8g2.drawUTF8(142, 232, up);
+  if (upLong) {
+    int w = u8g2.getUTF8Width(up);
+    u8g2.setForegroundColor(C(RGB_DARK));
+    char b[24]; snprintf(b, sizeof(b), "·%s", upLong);
+    u8g2.drawUTF8(142 + w + 2, 232, b);
+  }
+  // [▲]
   tft.fillCircle(238, 227, 8, C(RGB_DARK));
   tft.drawCircle(238, 227, 8, C(RGB_WHITE));
   tft.fillTriangle(238, 232, 234, 223, 242, 223, C(RGB_WHITE));
-  u8g2.drawUTF8(252, 232, dn);
+  u8g2.setForegroundColor(C(RGB_WHITE)); u8g2.drawUTF8(252, 232, dn);
+  if (dnLong) {
+    int w = u8g2.getUTF8Width(dn);
+    u8g2.setForegroundColor(C(RGB_DARK));
+    char b[24]; snprintf(b, sizeof(b), "·%s", dnLong);
+    u8g2.drawUTF8(252 + w + 2, 232, b);
+  }
   u8g2.setBackgroundColor(C(RGB_ORANGE));
 }
 
@@ -1110,22 +1145,28 @@ void drawHudStaticFrame() {
   u8g2.drawUTF8(84,  199, "温度");
   u8g2.drawUTF8(164, 199, "N2");
   u8g2.drawUTF8(244, 199, "用时");
-  // 底栏按键徽章 (圆形 + 字母/三角)
+  // 底栏: 3 个按键徽章 + 短按·长按文字
+  // 长按字用浅灰 (RGB_DARK) 区别于短按 (白)
   u8g2.setFont(u8g2_font_wqy12_t_gb2312);
   u8g2.setBackgroundColor(C(RGB_BLACK));
-  u8g2.setForegroundColor(C(RGB_WHITE));
+  // [M] 翻页·关机
   tft.fillCircle(18, 227, 8, C(RGB_DARK));
   tft.drawCircle(18, 227, 8, C(RGB_WHITE));
-  u8g2.drawUTF8(14, 232, "M");
+  u8g2.setForegroundColor(C(RGB_WHITE)); u8g2.drawUTF8(14, 232, "M");
   u8g2.drawUTF8(32, 232, "翻页");
+  u8g2.setForegroundColor(C(RGB_DARK));  u8g2.drawUTF8(62, 232, "·关机");
+  // [▼] 最深0·设置
   tft.fillCircle(128, 227, 8, C(RGB_DARK));
   tft.drawCircle(128, 227, 8, C(RGB_WHITE));
   tft.fillTriangle(128, 222, 124, 231, 132, 231, C(RGB_WHITE));
-  u8g2.drawUTF8(142, 232, "最深0");
+  u8g2.setForegroundColor(C(RGB_WHITE)); u8g2.drawUTF8(142, 232, "最深0");
+  u8g2.setForegroundColor(C(RGB_DARK));  u8g2.drawUTF8(184, 232, "·设置");
+  // [▲] 计时·屏保
   tft.fillCircle(238, 227, 8, C(RGB_DARK));
   tft.drawCircle(238, 227, 8, C(RGB_WHITE));
   tft.fillTriangle(238, 232, 234, 223, 242, 223, C(RGB_WHITE));
-  u8g2.drawUTF8(252, 232, "计时");
+  u8g2.setForegroundColor(C(RGB_WHITE)); u8g2.drawUTF8(252, 232, "计时");
+  u8g2.setForegroundColor(C(RGB_DARK));  u8g2.drawUTF8(282, 232, "·OTA");
   u8g2.setBackgroundColor(C(RGB_ORANGE));
 }
 
@@ -1239,12 +1280,11 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
     int w = u8g2.getUTF8Width(buf);
     int dx = (159 - w - 18) / 2;   // 留 18px 给单位 "米"
     if (dx < 2) dx = 2;
-    u8g2.setForegroundColor(dAlarm ? C(RGB_RED) : C(RGB_BLACK));
-    u8g2.drawUTF8(dx, 115, buf);
+    // 阴影描边 (右下 1px DARK) 让大字视觉柔和
+    drawTextWithShadow(dx, 115, buf, dAlarm ? C(RGB_RED) : C(RGB_BLACK), C(RGB_DARK));
     // 单位 "米"
     u8g2.setFont(u8g2_font_wqy16_t_gb2312);
-    u8g2.setForegroundColor(C(RGB_BLACK));
-    u8g2.drawUTF8(dx + w + 4, 112, "米");
+    drawTextWithShadow(dx + w + 4, 112, "米", C(RGB_BLACK), C(RGB_DARK));
     // 底部 ↓ 最深 X.Xm (强化潜水核心 KPI)
     if (g_diving || maxDepth > 0.5f) {
       u8g2.setFont(u8g2_font_wqy12_t_gb2312);
@@ -2869,7 +2909,7 @@ void setup() {
   mySPI.begin(TFT_SCK, -1, TFT_MOSI, TFT_CS);
   tft.init(240, 320);
   delay(80);   // 等 controller ready (重要, 不加可能白屏)
-  tft.setSPISpeed(40000000);
+  tft.setSPISpeed(27000000);   // 27MHz: 40MHz 信号 ringing 导致细线毛刺, 降速换稳定
   tft.setRotation(1);
   tft.invertDisplay(true);
   tft.fillScreen(C(RGB_BLACK));
