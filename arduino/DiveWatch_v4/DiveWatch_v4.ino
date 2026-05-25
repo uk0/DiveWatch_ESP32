@@ -203,6 +203,7 @@ uint8_t  g_planDepthM    = 18;      // 用户在 PAGE_PLAN 设的计划深度
 uint32_t g_lastInteractMs  = 0;
 bool     g_screenOff       = false;
 bool     g_pageDirty       = true;        // 切页或首次进入, 触发静态部分重绘
+bool     g_saverNeedsRedraw = true;        // 进入屏保时强制 saver 重绘 (覆盖旧帧残影)
 
 // Settings menu state
 bool     g_inSettings        = false;
@@ -3067,6 +3068,10 @@ void loop() {
       g_screenOff = false;
       digitalWrite(TFT_BL_PIN, TFT_BL_ON);  // 开背光
       setCpuFrequencyMhz(CPU_FREQ_ACTIVE);  // 唤醒回 240MHz
+      // 屏保期间屏幕残留旧帧, 强制全屏重画当前页
+      tft.fillScreen(C(RGB_ORANGE));
+      s_lastPage = 255;
+      g_pageDirty = true;
       Serial.println("[POWER] CPU 240MHz / BL on");
       // Consume the wake-up button event (don't trigger an action)
       if (anyBtnEvent) {
@@ -3079,9 +3084,11 @@ void loop() {
   if (!g_screenOff && !g_editingTime && !g_diving &&
       (now - g_lastInteractMs > g_screenOffMs)) {
     g_screenOff = true;
+    tft.fillScreen(C(RGB_BLACK));          // 先黑屏, 避免残影 + 让屏保 saver 干净起步
     digitalWrite(TFT_BL_PIN, TFT_BL_OFF);  // 关背光 (~40mA)
     setCpuFrequencyMhz(CPU_FREQ_IDLE);     // 降 80MHz 省电 ~30%
     Serial.println("[POWER] CPU 80MHz / BL off");
+    g_saverNeedsRedraw = true;             // 强制 saver 下次渲染 fillScreen + 重画
   }
 
   // ---- Battery (every 5s) ----
@@ -3343,8 +3350,9 @@ void loop() {
     uint8_t hh, mm, ss; getCurrentTime(hh, mm, ss);
     char buf[16];
     snprintf(buf, sizeof(buf), "%02u:%02u", hh, mm);
-    if (!s_saverInited || strcmp(buf, s_saverTime) != 0 || now - s_saverLastDraw > 30000) {
+    if (!s_saverInited || g_saverNeedsRedraw || strcmp(buf, s_saverTime) != 0 || now - s_saverLastDraw > 30000) {
       s_saverInited = true;
+      g_saverNeedsRedraw = false;
       strcpy(s_saverTime, buf);
       s_saverLastDraw = now;
       tft.fillScreen(C(RGB_BLACK));
