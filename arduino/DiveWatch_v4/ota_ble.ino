@@ -179,11 +179,19 @@ void otaStartBLE() {
 
   svc->start();
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
-  adv->addServiceUUID(OTA_SVC_UUID);
+  // 显式配置 advertising data + scan response, 确保扫描器能看到 name 和 service
+  NimBLEAdvertisementData advData;
+  advData.setName("DiveWatch-OTA");
+  advData.setFlags(0x06);                                  // LE General Discoverable + BR/EDR Not Supported
+  adv->setAdvertisementData(advData);
+  NimBLEAdvertisementData scanData;
+  scanData.setCompleteServices(NimBLEUUID(OTA_SVC_UUID));
+  adv->setScanResponseData(scanData);
   adv->enableScanResponse(true);
+  NimBLEDevice::setPower(ESP_PWR_LVL_P9);                  // 最大发射功率 +9 dBm
   adv->start();
 
-  Serial.println("[OTA] BLE advertising as 'DiveWatch-OTA'");
+  Serial.println("[OTA] BLE advertising as 'DiveWatch-OTA' (TX +9dBm)");
   otaDrawScreen("OTA 模式", "BLE 配 WiFi 中...", 0);
 
   // 自动尝试连上次保存的 WiFi
@@ -198,6 +206,26 @@ void otaStartBLE() {
 
 void otaLoopTick() {
   if (!g_otaMode) return;
+
+  // 长按 MODE 3 秒 → 退出 OTA, 重启回主固件
+  static uint32_t modePressMs = 0;
+  static bool     modePinReady = false;
+  if (!modePinReady) { pinMode(BTN_MODE_PIN, INPUT_PULLUP); modePinReady = true; }
+  if (digitalRead(BTN_MODE_PIN) == LOW) {
+    if (modePressMs == 0) {
+      modePressMs = millis();
+      Serial.println("[OTA] MODE pressed (hold 3s to exit)");
+    } else if (millis() - modePressMs > 3000) {
+      Serial.println("[OTA] MODE 3s → exit OTA, restart");
+      otaDrawScreen("退出 OTA", "回主固件...", -1);
+      delay(500);
+      ESP.restart();
+    }
+  } else {
+    if (modePressMs != 0) Serial.println("[OTA] MODE released");
+    modePressMs = 0;
+  }
+
   if (g_otaWifiOk) ArduinoOTA.handle();
 }
 
