@@ -166,14 +166,14 @@ def make_top():
                 Rectangle(PCB_FLEX_LEN_X, PCB_FLEX_LEN_Y)
         extrude(amount=flex_total_depth + 0.1, mode=Mode.SUBTRACT)
 
-        # === 密封 U 形凹槽 (上盖底面挖一圈, 容纳 ⌀2mm O 圈) ===
-        # 凸起在 bottom 顶面卡入此槽
+        # === 密封 U 形凹槽 (顶面 z=TOP_THICK 向下挖, 与 PCB 装入面同侧) ===
+        # PCB 从顶面 z=5 装入 pocket, 凹槽也在顶面 → 装配时这一面朝向 bottom
         groove_out_w = CASE_W - 2 * SEAL_INSET
         groove_out_h = CASE_H - 2 * SEAL_INSET
         groove_in_w  = groove_out_w - 2 * SEAL_GROOVE_W
         groove_in_h  = groove_out_h - 2 * SEAL_GROOVE_W
-        # 从底面 z=0 向上 +Z 挖入 SEAL_GROOVE_D (在 top 主体内向上挖)
-        with BuildSketch(Plane.XY.offset(0)):
+        # 从 z=TOP_THICK-SEAL_GROOVE_D 向上挖到 z=TOP_THICK (顶面开口)
+        with BuildSketch(Plane.XY.offset(TOP_THICK - SEAL_GROOVE_D)):
             RectangleRounded(groove_out_w, groove_out_h,
                               max(CORNER_R - SEAL_INSET, 0.5))
             RectangleRounded(groove_in_w, groove_in_h,
