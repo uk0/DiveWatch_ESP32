@@ -155,25 +155,25 @@ def make_top():
                 Rectangle(PCB_FLEX_LEN_X, PCB_FLEX_LEN_Y)
         extrude(amount=flex_total_depth + 0.1, mode=Mode.SUBTRACT)
 
-        # === 密封凸起 lip (底面一圈, 比下底凹槽窄 0.5mm 卡入) ===
-        lip_out_w = CASE_W - 2 * SEAL_INSET - SEAL_LIP_GAP
-        lip_out_h = CASE_H - 2 * SEAL_INSET - SEAL_LIP_GAP
-        lip_in_w  = lip_out_w - 2 * SEAL_LIP_W
-        lip_in_h  = lip_out_h - 2 * SEAL_LIP_W
-        # 凸起从 Z=0 (底面) 向下 -Z 方向凸出 SEAL_LIP_H
-        with BuildSketch(Plane.XY.offset(-SEAL_LIP_H)):
-            RectangleRounded(lip_out_w, lip_out_h,
-                              max(CORNER_R - SEAL_INSET - SEAL_LIP_GAP/2, 0.5))
-            RectangleRounded(lip_in_w, lip_in_h,
-                              max(CORNER_R - SEAL_INSET - SEAL_LIP_GAP/2 - SEAL_LIP_W, 0.5),
+        # === 密封 U 形凹槽 (上盖底面, 等下底凸起 lip 卡入压紧 O 圈) ===
+        groove_out_w = CASE_W - 2 * SEAL_INSET
+        groove_out_h = CASE_H - 2 * SEAL_INSET
+        groove_in_w  = groove_out_w - 2 * SEAL_GROOVE_W
+        groove_in_h  = groove_out_h - 2 * SEAL_GROOVE_W
+        # 从底面 z=0 向 +Z (主体内部) 挖入 SEAL_GROOVE_D
+        with BuildSketch(Plane.XY.offset(0)):
+            RectangleRounded(groove_out_w, groove_out_h,
+                              max(CORNER_R - SEAL_INSET, 0.5))
+            RectangleRounded(groove_in_w, groove_in_h,
+                              max(CORNER_R - SEAL_INSET - SEAL_GROOVE_W, 0.5),
                               mode=Mode.SUBTRACT)
-        extrude(amount=SEAL_LIP_H, mode=Mode.ADD)
+        extrude(amount=SEAL_GROOVE_D + 0.1, mode=Mode.SUBTRACT)
 
-        # 4 角螺丝沉头孔 (顶面穿到底, 含 lip 高度也要穿透)
-        with BuildSketch(Plane.XY.offset(-SEAL_LIP_H)):
+        # 4 角螺丝沉头孔 (顶面穿到底)
+        with BuildSketch():
             with Locations(*SCREW_LOCS):
                 Circle(SCREW_THRU_D / 2)
-        extrude(amount=TOP_THICK + SEAL_LIP_H, mode=Mode.SUBTRACT)
+        extrude(amount=TOP_THICK, mode=Mode.SUBTRACT)
         with BuildSketch(Plane.XY.offset(TOP_THICK - SCREW_HEAD_DEPTH)):
             with Locations(*SCREW_LOCS):
                 Circle(SCREW_HEAD_D / 2)
@@ -202,19 +202,20 @@ def make_bottom():
             RectangleRounded(inner_w, inner_h, max(CORNER_R - WALL, 1.5))
         extrude(amount=BOT_THICK, mode=Mode.SUBTRACT)
 
-        # 顶面 U 形密封凹槽 (向下挖一圈, 装 ⌀2mm O 圈)
-        # 凹槽中心线距外壁 SEAL_INSET + SEAL_GROOVE_W/2
-        groove_center_in = SEAL_INSET + SEAL_GROOVE_W / 2
-        out_w = CASE_W - 2 * SEAL_INSET
-        out_h = CASE_H - 2 * SEAL_INSET
-        in_w  = out_w - 2 * SEAL_GROOVE_W
-        in_h  = out_h - 2 * SEAL_GROOVE_W
-        with BuildSketch(Plane.XY.offset(BOT_THICK - SEAL_GROOVE_D)):
-            RectangleRounded(out_w, out_h, max(CORNER_R - SEAL_INSET, 0.5))
-            RectangleRounded(in_w, in_h,
-                              max(CORNER_R - SEAL_INSET - SEAL_GROOVE_W, 0.5),
+        # === 密封凸起 lip (顶面向上凸出, 卡入上盖底面凹槽压紧 O 圈) ===
+        # 凸起比上盖凹槽 (宽 SEAL_GROOVE_W=3.0) 略窄 SEAL_LIP_GAP 装配松量
+        lip_out_w = CASE_W - 2 * SEAL_INSET - SEAL_LIP_GAP
+        lip_out_h = CASE_H - 2 * SEAL_INSET - SEAL_LIP_GAP
+        lip_in_w  = lip_out_w - 2 * SEAL_LIP_W
+        lip_in_h  = lip_out_h - 2 * SEAL_LIP_W
+        # 从顶面 z=BOT_THICK 向上 +Z 凸出 SEAL_LIP_H
+        with BuildSketch(Plane.XY.offset(BOT_THICK)):
+            RectangleRounded(lip_out_w, lip_out_h,
+                              max(CORNER_R - SEAL_INSET - SEAL_LIP_GAP/2, 0.5))
+            RectangleRounded(lip_in_w, lip_in_h,
+                              max(CORNER_R - SEAL_INSET - SEAL_LIP_GAP/2 - SEAL_LIP_W, 0.5),
                               mode=Mode.SUBTRACT)
-        extrude(amount=SEAL_GROOVE_D + 0.1, mode=Mode.SUBTRACT)
+        extrude(amount=SEAL_LIP_H, mode=Mode.ADD)
 
         # 3 按钮孔 (穿透 -X 侧壁, Z 方向居中)
         btn_z = BOT_THICK / 2   # 按钮居中, 装配时按钮压杆好对齐
