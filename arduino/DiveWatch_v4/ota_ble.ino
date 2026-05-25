@@ -4,8 +4,11 @@
 #include <NimBLEDevice.h>
 #include <WiFi.h>
 #include <ArduinoOTA.h>
+#include <WebServer.h>
 #include <Update.h>
 #include <esp_ota_ops.h>
+
+WebServer g_otaWeb(80);
 
 #define OTA_SVC_UUID  "1d14d6ee-fd63-4fa1-bfa4-8f47b42119f0"
 #define OTA_SSID_UUID "f7bf3564-fb6d-4e53-88a4-5e37e0326063"
@@ -105,15 +108,115 @@ static void otaStartWifiOTA() {
     delay(500);
   });
   ArduinoOTA.onError([](ota_error_t e) {
-    char buf[40]; snprintf(buf, sizeof(buf), "OTA_ERROR %d", (int)e);
+    const char *desc = "未知";
+    switch (e) {
+      case OTA_AUTH_ERROR:    desc = "认证失败"; break;
+      case OTA_BEGIN_ERROR:   desc = "BEGIN失败"; break;
+      case OTA_CONNECT_ERROR: desc = "连接失败"; break;
+      case OTA_RECEIVE_ERROR: desc = "接收丢包"; break;
+      case OTA_END_ERROR:     desc = "END校验失败"; break;
+    }
+    char buf[60]; snprintf(buf, sizeof(buf), "ERR %d %s", (int)e, desc);
     otaNotify(buf);
     otaDrawScreen("OTA 错误", buf, -1);
+    Serial.printf("[OTA] error %d (%s), state can retry\n", (int)e, desc);
+    // 不重启, 让 ArduinoOTA 内部可以接受下一次 invitation 重试
   });
   ArduinoOTA.begin();
+
+  // ---- HTTP Web 服务 (端口 80) ----
+  g_otaWeb.on("/", HTTP_GET, []() {
+    String html = F("<!DOCTYPE html><html><head><meta charset='UTF-8'>"
+                    "<title>DiveWatch OTA</title>"
+                    "<style>body{font-family:-apple-system,sans-serif;max-width:480px;"
+                    "margin:30px auto;padding:0 20px}h1{color:#FF6600}"
+                    ".card{background:#f5f5f5;border-radius:8px;padding:16px;margin:12px 0}"
+                    "button,input[type=submit]{background:#FF6600;color:#fff;border:0;"
+                    "padding:12px 24px;border-radius:6px;font-size:15px;cursor:pointer;width:100%}"
+                    "input[type=file]{width:100%;padding:10px;margin:8px 0}"
+                    ".bar{background:#eee;border-radius:6px;height:24px;overflow:hidden;margin:12px 0}"
+                    ".fill{background:#FF6600;height:100%;width:0;transition:width 0.2s}"
+                    "</style></head><body>"
+                    "<h1>🔄 DiveWatch OTA</h1>"
+                    "<div class='card'>"
+                    "<p>设备在线 ✓ &nbsp;|&nbsp; 内存 ");
+    html += String(ESP.getFreeHeap()/1024) + "/" + String(ESP.getHeapSize()/1024) + " KB</p>"
+            "<p>IP: " + g_otaIp + " &nbsp;|&nbsp; Sketch: " +
+            String(ESP.getSketchSize()/1024) + " KB</p>"
+            "<p>当前 slot: " + esp_ota_get_running_partition()->label +
+            " &nbsp;|&nbsp; 下次写入: " + (esp_ota_get_next_update_partition(NULL) ?
+              esp_ota_get_next_update_partition(NULL)->label : "?") + "</p>"
+            "</div><div class='card'>"
+            "<h3>上传固件</h3>"
+            "<form id='f' method='POST' action='/update' enctype='multipart/form-data'>"
+            "<input type='file' name='firmware' accept='.bin' required>"
+            "<input type='submit' value='📤 开始刷写'>"
+            "</form>"
+            "<div class='bar'><div class='fill' id='b'></div></div>"
+            "<div id='st'></div>"
+            "</div><div class='card'>"
+            "<button onclick=\"fetch('/restart').then(_=>alert('已重启'))\">↻ 重启设备</button>"
+            "</div>"
+            "<script>"
+            "document.getElementById('f').onsubmit=function(e){e.preventDefault();"
+            "var fd=new FormData(this);var x=new XMLHttpRequest();"
+            "x.upload.onprogress=function(ev){if(ev.lengthComputable){"
+            "var p=Math.round(ev.loaded*100/ev.total);"
+            "document.getElementById('b').style.width=p+'%';"
+            "document.getElementById('st').innerText='上传 '+p+'%'}};"
+            "x.onload=function(){document.getElementById('st').innerText="
+            "x.status==200?'✓ 完成! 设备重启中':'✗ 失败: '+x.responseText};"
+            "x.open('POST','/update');x.send(fd);};"
+            "</script></body></html>";
+    g_otaWeb.send(200, "text/html; charset=utf-8", html);
+  });
+
+  g_otaWeb.on("/restart", HTTP_GET, []() {
+    g_otaWeb.send(200, "text/plain", "restarting");
+    delay(300); ESP.restart();
+  });
+
+  g_otaWeb.on("/update", HTTP_POST, []() {
+    g_otaWeb.sendHeader("Connection", "close");
+    g_otaWeb.send(Update.hasError() ? 500 : 200, "text/plain",
+                  Update.hasError() ? Update.errorString() : "OK");
+    delay(500); ESP.restart();
+  }, []() {
+    HTTPUpload &up = g_otaWeb.upload();
+    if (up.status == UPLOAD_FILE_START) {
+      Serial.printf("[OTA-HTTP] start: %s\n", up.filename.c_str());
+      otaDrawScreen("HTTP 上传中", up.filename.c_str(), 0);
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+        Serial.println(Update.errorString());
+      }
+    } else if (up.status == UPLOAD_FILE_WRITE) {
+      if (Update.write(up.buf, up.currentSize) != up.currentSize) {
+        Serial.println(Update.errorString());
+      }
+      static uint32_t lastShown = 0;
+      if (millis() - lastShown > 200) {
+        lastShown = millis();
+        int pct = (int)(Update.progress() * 100 / (Update.size() ? Update.size() : 1));
+        char ln[32]; snprintf(ln, sizeof(ln), "%u KB", up.totalSize/1024);
+        otaDrawScreen("HTTP 上传", ln, pct);
+      }
+    } else if (up.status == UPLOAD_FILE_END) {
+      if (Update.end(true)) {
+        Serial.printf("[OTA-HTTP] done: %u bytes\n", up.totalSize);
+        otaDrawScreen("刷写完成", "重启中...", 100);
+      } else {
+        Serial.printf("[OTA-HTTP] end fail: %s\n", Update.errorString());
+        otaDrawScreen("END 失败", Update.errorString(), -1);
+      }
+    }
+  });
+
+  g_otaWeb.begin();
+  Serial.printf("[OTA] HTTP server on http://%s/\n", g_otaIp.c_str());
   otaNotify("OTA_READY");
 
   char ipLine[40];
-  snprintf(ipLine, sizeof(ipLine), "IP: %s", g_otaIp.c_str());
+  snprintf(ipLine, sizeof(ipLine), "http://%s/", g_otaIp.c_str());
   otaDrawScreen("OTA 已就绪", ipLine, 0);
 }
 
@@ -226,7 +329,10 @@ void otaLoopTick() {
     modePressMs = 0;
   }
 
-  if (g_otaWifiOk) ArduinoOTA.handle();
+  if (g_otaWifiOk) {
+    ArduinoOTA.handle();
+    g_otaWeb.handleClient();
+  }
 }
 
 bool otaCheckMagicFlag() {
