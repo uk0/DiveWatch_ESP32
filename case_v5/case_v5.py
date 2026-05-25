@@ -34,15 +34,20 @@ PCB_T      = 1.2    # 屏 PCB 厚
 # 用户实测: 22mm (X) × 5mm (Y) × 深 1.3mm
 PCB_FLEX_LEN_X = 22.0           # 沿 X 方向 (中央居中)
 PCB_FLEX_LEN_Y = 5.0            # 沿 Y 方向
-PCB_FLEX_DEPTH = 1.3            # 比 PCB pocket 再深 1.3mm
+PCB_FLEX_DEPTH = 2.5            # 比 PCB pocket 再深 2.5mm (用户要求加深)
 PCB_FLEX_END   = -1             # -1 = -Y 端 (底端), +1 = +Y 端 (顶端)
 
 # 屏幕在 PCB 上居中, 长方向上下各预留 (73.5-60.6)/2 = 6.45 mm
 
-# ===== 按钮 (左侧面 -X) =====
-BTN_HOLE_D     = 3.3       # 圆孔直径
-BTN_SPACING    = 13.1      # 相邻按钮间距
-BTN_COUNT      = 3         # 共 3 个
+# ===== 按钮 (左侧面 -X) - 按钮本体 6.2x6.2mm 方块嵌入 =====
+# 中间圆孔 (按钮触发) ⌀4.0, 两侧按钮孔 ⌀5.0 (加大)
+# 按钮本体方坑 6.6x6.6 (= 6.2 + 0.4 装配间隙) 嵌入壁内 3mm 深, 留 0.5mm 壁让水不进
+BTN_BODY_SIZE   = 6.6      # 按钮本体方坑边长 (6.2 + 0.4 间隙)
+BTN_BODY_DEPTH  = 3.0      # 方坑挖入壁内深度
+BTN_HOLE_CENTER = 4.0      # 中间按钮触发圆孔直径
+BTN_HOLE_SIDE   = 5.0      # 两侧按钮触发圆孔直径 (用户要求加大)
+BTN_SPACING     = 13.1     # 相邻按钮间距
+BTN_COUNT       = 3        # 共 3 个
 
 # ===== 压力传感器 (装在 +X 长侧面居中) =====
 # PCB 嵌在 +X 内壁凹槽里, 凹槽间隙加大避免装不进
@@ -68,10 +73,10 @@ TP4056_H     = 27.2
 TP4056_T     = 3.5
 TP4056_PCB_T = 1.6
 
-# ===== 无线充电线圈凹槽 (替代 USB-C, 在下底外底面居中) =====
-# 圆形凹陷, 用户指定底壁剩余 1.2mm (让无线信号穿透)
-WIRELESS_COIL_OD     = 45.0           # 线圈外径 (可调, Qi 标准 40-44mm)
-WIRELESS_COIL_DEPTH  = 2.5 - 1.2      # = 1.3mm (= WALL 2.5 − 剩余壁 1.2)
+# ===== 无线充电线圈凹槽 (装在 bottom 内腔底面, 不外露) =====
+# 凹槽从内腔底面 (z=WALL) 向下挖入, 留外壁 1.2mm 让 Qi 磁场穿透
+WIRELESS_COIL_OD     = 45.0           # 线圈外径 (Qi 标准 40-44mm)
+WIRELESS_COIL_DEPTH  = 1.3            # 凹槽深 (向 -Z 挖, 外壁剩 WALL-DEPTH = 1.2mm)
 
 # ===== 外壳总尺寸 =====
 WALL       = 2.5
@@ -81,28 +86,30 @@ CORNER_R   = 4.0
 # PCB 周边: WALL(2.5) + SEAL_INSET(2) + SEAL_GROOVE_W(3) + 余量(0.5) = 8mm
 CASE_W     = PCB_W + 2 * (WALL + 4.0)             # 45 + 13 = 58
 CASE_H     = PCB_H + 2 * (WALL + 4.0)             # 73.5 + 13 = 86.5
-CASE_Z     = 44.4                                  # 用户指定总厚度
-TOP_THICK  = 5.0                                   # 顶盖加厚 (3.5→5.0, 防 PCB pocket + FPC 槽 + lip 相交切穿)
-BOT_THICK  = CASE_Z - TOP_THICK                    # 下底厚 = 39.4
+CASE_Z     = 22.0                                  # 总厚度缩一半 (44.4 → 22)
+TOP_THICK  = 5.0                                   # 顶盖含 PCB pocket + FPC 槽
+BOT_THICK  = CASE_Z - TOP_THICK                    # 下底厚 = 17.0
 
 # ============================================================
 # 防水密封: 上下盖凹凸契合结构 + O 圈
 # ============================================================
-# 下底顶面: U 形凹槽 (含 O 圈), 凹槽宽 GROOVE_W, 深 GROOVE_D
-# 上盖底面: 与凹槽对齐的凸起 lip, 比凹槽窄 / 浅, 卡入凹槽压紧 O 圈
-SEAL_INSET    = 2.0   # 密封线距外壁内退距离 (沿周向)
-SEAL_GROOVE_W = 3.0   # U 形凹槽宽度
-SEAL_GROOVE_D = 2.0   # U 形凹槽深度 (可容纳 ⌀2mm O 圈)
-SEAL_LIP_W    = 2.0   # 凸起宽度 (小于槽宽 0.5mm 装配间隙)
-SEAL_LIP_H    = 1.5   # 凸起高度 (小于槽深 0.5mm 留给 O 圈压缩量)
-SEAL_LIP_GAP  = 0.5   # 凸起两侧装配松量 (各 0.25mm)
+# 下底顶面: 梯形凸起 lip (底宽 4mm 与主体融合, 顶宽 2mm 卡入 top 凹槽)
+# 上盖顶面: U 形凹槽 (装 ⌀2mm O 圈)
+# 梯形 lip 底部宽 → 与 bottom 主体接触面积大, 不易掉; 顶部窄 → 卡入 top 凹槽
+SEAL_INSET     = 2.0   # 密封线距外壁内退距离
+SEAL_GROOVE_W  = 3.0   # U 形凹槽宽度 (top)
+SEAL_GROOVE_D  = 2.0   # U 形凹槽深度
+SEAL_LIP_TOP_W = 2.0   # 凸起顶部宽度 (卡入凹槽部分)
+SEAL_LIP_BOT_W = 4.0   # 凸起底部宽度 (与 bottom 主体融合, 加大接触面防掉)
+SEAL_LIP_H     = 1.5   # 凸起高度
+SEAL_LIP_GAP   = 0.5   # 凸起顶部两侧装配松量
 
 # ===== 表带耳 (两端各 2 个) =====
 STRAP_WIDTH    = 24.0   # 表带宽 = 两耳间距
 LUG_THICK      = 4.0    # 单个耳片 X 厚度
 LUG_OUT        = 6.0    # 耳片向 ±Y 凸出长度
 LUG_HEIGHT     = 8.0    # 耳片 Z 高度
-LUG_Z_CENTER   = 22.0   # 耳片 Z 中心位置 (从 bottom 底面起)
+LUG_Z_CENTER   = 8.5    # 耳片 Z 中心 (BOT_THICK 17 的中点)
 SPRING_BAR_D   = 2.5    # 弹簧棒孔直径
 LUG_FILLET_R   = 1.5    # 耳片末端圆角
 
@@ -214,36 +221,58 @@ def make_bottom():
             RectangleRounded(inner_w, inner_h, max(CORNER_R - WALL, 1.5))
         extrude(amount=BOT_THICK, mode=Mode.SUBTRACT)
 
-        # === 密封凸起 lip (顶面向上凸出, 卡入上盖底面凹槽压紧 O 圈) ===
-        lip_out_w = CASE_W - 2 * SEAL_INSET - SEAL_LIP_GAP
-        lip_out_h = CASE_H - 2 * SEAL_INSET - SEAL_LIP_GAP
-        lip_in_w  = lip_out_w - 2 * SEAL_LIP_W
-        lip_in_h  = lip_out_h - 2 * SEAL_LIP_W
-        # 从顶面 z=BOT_THICK 向上 +Z 凸出 SEAL_LIP_H
-        with BuildSketch(Plane.XY.offset(BOT_THICK)):
-            RectangleRounded(lip_out_w, lip_out_h,
-                              max(CORNER_R - SEAL_INSET - SEAL_LIP_GAP/2, 0.5))
-            RectangleRounded(lip_in_w, lip_in_h,
-                              max(CORNER_R - SEAL_INSET - SEAL_LIP_GAP/2 - SEAL_LIP_W, 0.5),
-                              mode=Mode.SUBTRACT)
-        extrude(amount=SEAL_LIP_H, mode=Mode.ADD)
+        # === 梯形密封 lip (底宽 4mm 与主体融合, 顶宽 2mm 卡入 top 凹槽) ===
+        # 由两段 extrude 模拟梯形: 底层 (高 0.5mm, 宽 BOT 4mm) + 顶层 (高 1.0mm, 宽 TOP 2mm)
+        # 这样接触面 = 4mm 宽周长 → 远大于 2mm 凸起, 不易掉
+        for layer in [0, 1]:
+            if layer == 0:
+                lw   = SEAL_LIP_BOT_W
+                z_lo = BOT_THICK
+                z_hi = BOT_THICK + 0.5
+            else:
+                lw   = SEAL_LIP_TOP_W - SEAL_LIP_GAP   # 顶部留装配松量
+                z_lo = BOT_THICK + 0.5
+                z_hi = BOT_THICK + SEAL_LIP_H
+            lip_out_w = CASE_W - 2 * SEAL_INSET
+            lip_out_h = CASE_H - 2 * SEAL_INSET
+            lip_in_w  = lip_out_w - 2 * lw
+            lip_in_h  = lip_out_h - 2 * lw
+            with BuildSketch(Plane.XY.offset(z_lo)):
+                RectangleRounded(lip_out_w, lip_out_h,
+                                  max(CORNER_R - SEAL_INSET, 0.5))
+                RectangleRounded(lip_in_w, lip_in_h,
+                                  max(CORNER_R - SEAL_INSET - lw, 0.5),
+                                  mode=Mode.SUBTRACT)
+            extrude(amount=z_hi - z_lo, mode=Mode.ADD)
 
-        # 3 按钮孔 (穿透 -X 侧壁, Z 方向偏上一些)
-        btn_z = BOT_THICK / 2 + 4.0   # 上移 4mm (从居中 20.45 -> 24.45)
-        with BuildSketch(Plane.YZ.offset(-(CASE_W / 2 + 0.5))):
+        # === 3 按钮孔 (穿透 -X 侧壁) Z 中心下移居中, 按钮本体方坑嵌入 ===
+        # btn_z: BOT_THICK 17 的中央偏下 (BOT_THICK/2 - 1)
+        btn_z = BOT_THICK / 2 - 1.0
+        # 按钮本体方坑 (从外壁向内挖 BTN_BODY_DEPTH mm, 嵌入 6.2x6.2 按钮)
+        with BuildSketch(Plane.YZ.offset(-(CASE_W / 2 + 0.1))):
             for ly in BTN_Y_LOCS:
                 with Locations((ly, btn_z)):
-                    Circle(BTN_HOLE_D / 2)
-        extrude(amount=WALL + 0.6, mode=Mode.SUBTRACT)
+                    Rectangle(BTN_BODY_SIZE, BTN_BODY_SIZE)
+        extrude(amount=BTN_BODY_DEPTH, mode=Mode.SUBTRACT)
+        # 中间按钮触发圆孔 ⌀4.0 (穿透壁内残留部分)
+        with BuildSketch(Plane.YZ.offset(-(CASE_W / 2 + 0.1))):
+            with Locations((BTN_Y_LOCS[1], btn_z)):
+                Circle(BTN_HOLE_CENTER / 2)
+        extrude(amount=WALL + 0.5, mode=Mode.SUBTRACT)
+        # 两侧按钮触发圆孔 ⌀5.0 (用户要求加大)
+        with BuildSketch(Plane.YZ.offset(-(CASE_W / 2 + 0.1))):
+            with Locations((BTN_Y_LOCS[0], btn_z), (BTN_Y_LOCS[2], btn_z)):
+                Circle(BTN_HOLE_SIDE / 2)
+        extrude(amount=WALL + 0.5, mode=Mode.SUBTRACT)
 
-        # === 压力传感器 PCB 凹槽 (从 +X 内壁挖, 居中) ===
-        press_cz = BOT_THICK / 2
+        # === 压力传感器 PCB 凹槽 (从 +X 内壁挖, 中心 Z 同按钮高度) ===
+        press_cz = btn_z   # 与按钮同高, 整体向下移
         with BuildSketch(Plane.YZ.offset(CASE_W / 2 - WALL)):
             with Locations((PRESS_CENTER_Y, press_cz)):
                 Rectangle(PRESS_PCB_H + PRESS_PCB_GAP, PRESS_PCB_W + PRESS_PCB_GAP)
         extrude(amount=-PRESS_PCB_POCKET_D, mode=Mode.SUBTRACT)
 
-        # === 压力传感器圆孔 (+X 外壁穿入, 对准 PCB 右上角, 留 3mm 边距) ===
+        # === 压力传感器圆孔 (+X 外壁穿入, PCB 右上角偏移) ===
         sensor_cy = PRESS_CENTER_Y + (PRESS_PCB_H / 2 - PRESS_SENSOR_EDGE_MARGIN)
         sensor_cz = press_cz + (PRESS_PCB_W / 2 - PRESS_SENSOR_EDGE_MARGIN)
         with BuildSketch(Plane.YZ.offset(CASE_W / 2 + 0.1)):
@@ -251,11 +280,14 @@ def make_bottom():
                 Circle(PRESS_SENSOR_D / 2)
         extrude(amount=-(WALL + 0.2), mode=Mode.SUBTRACT)
 
-        # === 无线充电线圈凹槽 (外底面居中圆形凹陷, 替代 USB-C) ===
-        # 从外底面 z=0 向内挖 1.3mm, 剩余 1.2mm 底壁让无线信号穿透
-        with BuildSketch(Plane.XY.offset(0)):
+        # === 无线充电线圈凹槽 (内腔底面, 不在外底面) ===
+        # 从内腔底面 z=WALL 向 +Z 挖 WIRELESS_COIL_DEPTH 凹槽固定线圈
+        # 实际:让线圈卡在 z=[WALL-DEPTH=1.2, WALL=2.5] 区间, 外底面 z=0 平整
+        # 即从外底面 z=0 向上挖到 z=DEPTH, 但留四周 (内腔大于线圈) 的部分作为线圈卡位
+        # 简化: 从内腔底面 z=WALL 向下 (-Z) 挖凹槽, 但凹槽底距外底 = WALL - DEPTH
+        with BuildSketch(Plane.XY.offset(WALL - WIRELESS_COIL_DEPTH)):
             Circle(WIRELESS_COIL_OD / 2)
-        extrude(amount=WIRELESS_COIL_DEPTH, mode=Mode.SUBTRACT)
+        extrude(amount=WIRELESS_COIL_DEPTH + 0.1, mode=Mode.SUBTRACT)
 
         # 4 角螺丝攻丝柱 + 攻丝孔
         with BuildSketch(Plane.XY.offset(WALL)):
