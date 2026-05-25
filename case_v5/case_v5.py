@@ -76,9 +76,11 @@ WIRELESS_COIL_DEPTH  = 2.5 - 1.2      # = 1.3mm (= WALL 2.5 − 剩余壁 1.2)
 # ===== 外壳总尺寸 =====
 WALL       = 2.5
 CORNER_R   = 4.0
-# PCB 周边 1.5 mm 间隙 + 壁厚
-CASE_W     = PCB_W + 2 * (WALL + 1.5)             # ≈ 53
-CASE_H     = PCB_H + 2 * (WALL + 1.5)             # ≈ 81.5
+# 外壳必须足够大让 U 槽内缘 > PCB pocket, 否则上盖会被切断
+# 需求: CASE >= PCB_pocket + 2*SEAL_GROOVE_W + 2*SEAL_INSET + 2*0.5(余量) = PCB+0.4 + 6 + 4 + 1 = PCB+11.4
+# PCB 周边: WALL(2.5) + SEAL_INSET(2) + SEAL_GROOVE_W(3) + 余量(0.5) = 8mm
+CASE_W     = PCB_W + 2 * (WALL + 4.0)             # 45 + 13 = 58
+CASE_H     = PCB_H + 2 * (WALL + 4.0)             # 73.5 + 13 = 86.5
 CASE_Z     = 44.4                                  # 用户指定厚度
 TOP_THICK  = 3.5                                   # 顶盖厚 (含屏幕沉槽)
 BOT_THICK  = CASE_Z - TOP_THICK                    # 下底厚
