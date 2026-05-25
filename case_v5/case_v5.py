@@ -44,21 +44,18 @@ BTN_HOLE_D     = 3.3       # 圆孔直径
 BTN_SPACING    = 13.1      # 相邻按钮间距
 BTN_COUNT      = 3         # 共 3 个
 
-# ===== 压力传感器 (装在底盖外底面, 表背贴手腕方向) =====
-# PCB 平躺贴在下底内表面 (Z+ 内腔底), 凹槽固定; 外底面圆孔让水接触传感器圆顶
-PRESS_PCB_W       = 10.2   # PCB X 方向尺寸
-PRESS_PCB_H       = 13.0   # PCB Y 方向尺寸
-PRESS_PCB_POCKET_D = 1.8   # PCB 凹槽深 (= PCB 厚 1.6mm + 0.2 间隙)
-PRESS_PCB_GAP     = 0.3    # 凹槽周向松量
+# ===== 压力传感器 (装在 +X 长侧面居中) =====
+# PCB 嵌在 +X 内壁凹槽里, 凹槽间隙加大避免装不进
+# 外壁圆孔 ⌀3.6 对准 PCB 右上角 (距 PCB 边缘留 3mm 边距, 不靠角)
+PRESS_PCB_W       = 10.2   # PCB Z 方向尺寸 (沿外壳厚度)
+PRESS_PCB_H       = 13.0   # PCB Y 方向尺寸 (沿外壳长边)
+PRESS_PCB_POCKET_D = 1.8   # 凹槽深 (向 -X 内壁挖)
+PRESS_PCB_GAP     = 1.0    # 凹槽周向松量 (单边 0.5mm, 加大避免装不进)
 PRESS_SENSOR_D    = 3.6    # 传感器圆顶孔直径
-# 传感器在 PCB 右上角偏移 (距 PCB 中心)
-PRESS_SENSOR_OFFSET_X = PRESS_PCB_W / 2 - 2.5   # 距中心右侧 2.5mm
-PRESS_SENSOR_OFFSET_Y = PRESS_PCB_H / 2 - 2.5   # 距中心上方 2.5mm
-# PCB 凹槽中心位置 (内腔底面坐标)
-# 内腔 48×76.5mm, 电池 34×51mm 居中占 ±17×±25.5, 剩余 +Y 端 12.75mm
-# 把传感器放电池上方居中, 避开电池凸点 (BAT_H 在下面定义但运行时 OK)
-PRESS_CENTER_X = 0.0
-PRESS_CENTER_Y = 33.5       # = BAT_H/2 (25.5) + PRESS_PCB_H/2 (6.5) + 1.5 间隙
+PRESS_SENSOR_EDGE_MARGIN = 3.0   # 圆孔距 PCB 边缘距离 (距角 3mm, 不靠边)
+# PCB 凹槽中心: +X 长侧面居中 (Y=0, Z=BOT_THICK/2)
+PRESS_CENTER_Y = 0.0
+# Z 中心在 BOT_THICK 的 1/2 位置 (即外壳厚度中部)
 
 # ===== 电池 =====
 BAT_T = 4.8
@@ -204,19 +201,20 @@ def make_bottom():
         # 仅 extrude 到刚穿透壁 (WALL + 0.5 起 + 0.6 = 内腔内 0.1mm)
         extrude(amount=WALL + 0.6, mode=Mode.SUBTRACT)
 
-        # === 压力传感器 PCB 凹槽 (在内腔底面, 平躺) ===
-        with BuildSketch(Plane.XY.offset(WALL)):
-            with Locations((PRESS_CENTER_X, PRESS_CENTER_Y)):
-                Rectangle(PRESS_PCB_W + PRESS_PCB_GAP, PRESS_PCB_H + PRESS_PCB_GAP)
+        # === 压力传感器 PCB 凹槽 (从 +X 内壁挖, 居中) ===
+        press_cz = BOT_THICK / 2
+        with BuildSketch(Plane.YZ.offset(CASE_W / 2 - WALL)):
+            with Locations((PRESS_CENTER_Y, press_cz)):
+                Rectangle(PRESS_PCB_H + PRESS_PCB_GAP, PRESS_PCB_W + PRESS_PCB_GAP)
         extrude(amount=-PRESS_PCB_POCKET_D, mode=Mode.SUBTRACT)
 
-        # === 压力传感器圆孔 (外底面穿透到凹槽, 对准 PCB 右上角) ===
-        sensor_x = PRESS_CENTER_X + PRESS_SENSOR_OFFSET_X
-        sensor_y = PRESS_CENTER_Y + PRESS_SENSOR_OFFSET_Y
-        with BuildSketch(Plane.XY.offset(-0.1)):
-            with Locations((sensor_x, sensor_y)):
+        # === 压力传感器圆孔 (+X 外壁穿入, 对准 PCB 右上角, 留 3mm 边距) ===
+        sensor_cy = PRESS_CENTER_Y + (PRESS_PCB_H / 2 - PRESS_SENSOR_EDGE_MARGIN)
+        sensor_cz = press_cz + (PRESS_PCB_W / 2 - PRESS_SENSOR_EDGE_MARGIN)
+        with BuildSketch(Plane.YZ.offset(CASE_W / 2 + 0.1)):
+            with Locations((sensor_cy, sensor_cz)):
                 Circle(PRESS_SENSOR_D / 2)
-        extrude(amount=WALL + 0.2, mode=Mode.SUBTRACT)
+        extrude(amount=-(WALL + 0.2), mode=Mode.SUBTRACT)
 
         # USB-C 矩形孔 (-Y 端壁, 中间高度)
         usbc_z = BOT_THICK / 2
