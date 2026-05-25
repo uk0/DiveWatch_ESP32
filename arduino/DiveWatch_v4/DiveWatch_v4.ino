@@ -1289,10 +1289,10 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
     u8g2.drawUTF8(241 - w/2, 115, buf);
     u8g2.setFont(u8g2_font_wqy12_t_gb2312);
     u8g2.drawUTF8(180, 145, "减速保护耳压");
-  } else if (curStatus == 3) {  // 安停 RUNNING
+  } else if (curStatus == 3) {  // 安停 RUNNING (绿色)
     u8g2.setFont(u8g2_font_wqy16_t_gb2312);
     u8g2.setBackgroundColor(C(RGB_ORANGE));
-    u8g2.setForegroundColor(C(RGB_RED));
+    u8g2.setForegroundColor(C(RGB_GREEN));
     u8g2.drawUTF8(180, 60, "● 安全停留");
     u8g2.setFont(u8g2_font_logisoso50_tn);
     snprintf(buf, sizeof(buf), "%lu", (unsigned long)ssRemainSec);
@@ -1302,10 +1302,10 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
     u8g2.drawUTF8(241 - w/2 + w + 4, 122, "秒");
     u8g2.setFont(u8g2_font_wqy12_t_gb2312);
     u8g2.drawUTF8(180, 152, "保持 3-6 米");
-  } else if (curStatus == 4) {  // 安停完成
+  } else if (curStatus == 4) {  // 安停完成 (绿色)
     u8g2.setFont(u8g2_font_wqy16_t_gb2312);
     u8g2.setBackgroundColor(C(RGB_ORANGE));
-    u8g2.setForegroundColor(C(RGB_BLACK));
+    u8g2.setForegroundColor(C(RGB_GREEN));
     u8g2.drawUTF8(180, 60, "✓ 安停完成");
     u8g2.setFont(u8g2_font_wqy16_t_gb2312);
     u8g2.drawUTF8(195, 110, "可上水面");
@@ -1494,15 +1494,15 @@ void drawProfile(float depth) {
   u8g2.setForegroundColor(C(RGB_BLACK));
   snprintf(buf, sizeof(buf), "最深 %.1fm", maxD);
   u8g2.drawUTF8(10, 210, buf);
-  // 安全停留状态指示
+  // 安全停留状态指示 (绿色)
   if (g_ss == SS_RUNNING || g_ss == SS_ARMED) {
     uint32_t remain = (g_ssAccumMs >= (uint32_t)g_safetyStopSec*1000UL) ? 0
                       : ((uint32_t)g_safetyStopSec*1000UL - g_ssAccumMs);
     snprintf(buf, sizeof(buf), "安停 %lus", (unsigned long)(remain/1000));
-    u8g2.setForegroundColor(C(RGB_RED));
+    u8g2.setForegroundColor(C(RGB_GREEN));
     u8g2.drawUTF8(140, 210, buf);
   } else if (g_ss == SS_DONE) {
-    u8g2.setForegroundColor(C(RGB_BLACK));
+    u8g2.setForegroundColor(C(RGB_GREEN));
     u8g2.drawUTF8(140, 210, "安停完成");
   }
   // 右侧采样信息
@@ -2697,14 +2697,19 @@ void enterDeepSleep() {
   saveClockToNVS();
   saveSettingsToNVS();
 
-  // 显示"关机中"画面
-  // tft.enableDisplay (no-op v4)
-  u8g2.setFont(FONT_CN);
-  u8g2.drawUTF8(0, 16, "正在关机...");
-  u8g2.drawUTF8(0, 36, "再次长按 MODE");
-  u8g2.drawUTF8(0, 50, "2 秒以上即可开机");
+  // 全屏关机画面 (320x240)
+  tft.fillScreen(C(RGB_BLACK));
+  u8g2.setBackgroundColor(C(RGB_BLACK));
+  u8g2.setForegroundColor(C(RGB_ORANGE));
+  u8g2.setFont(u8g2_font_logisoso28_tn);
+  u8g2.drawUTF8(60, 90, "0FF");
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+  u8g2.setForegroundColor(C(RGB_WHITE));
+  u8g2.drawUTF8(60, 140, "正在关机...");
+  u8g2.drawUTF8(40, 170, "长按 MODE 2 秒开机");
+  u8g2.setForegroundColor(C(RGB_ORANGE));
+  u8g2.drawUTF8(80, 210, "Deep Sleep ~10uA");
 
-  // 蜂鸣 3 长声做关机提示
   beepBlocking(3, 250, 150);
   delay(800);
 
@@ -3451,8 +3456,14 @@ void loop() {
                 g_batVoltage, g_batPct,
                 digitalRead(BTN_MODE_PIN), digitalRead(BTN_UP_PIN), digitalRead(BTN_DOWN_PIN));
 
+  // ---- Auto Deep Sleep: 屏保后再 10 分钟无活动 + 非潜水 → 自动关机 ----
+  if (g_screenOff && !g_diving && !g_editingTime && !g_inSettings
+      && (now - g_lastInteractMs > g_screenOffMs + 10UL*60*1000)) {
+    Serial.println("[POWER] 长时间无活动, 自动 deep sleep");
+    enterDeepSleep();
+  }
+
   // ---- Light Sleep: 屏保期间深度省电 (~5-10mA, 比 80MHz 待机更省) ----
-  // 仅在: 屏保激活 + 非潜水 + 非编辑/设置 模式下进入
   if (g_screenOff && !g_diving && !g_editingTime && !g_inSettings) {
     Serial.flush();
     // 唤醒源: 任一按键 (GPIO LOW) 或 5 秒 timer (定期醒来更新电池)
