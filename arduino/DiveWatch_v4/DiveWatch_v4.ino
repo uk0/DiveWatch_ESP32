@@ -110,7 +110,9 @@ struct DiveRecord {
 #define BTN_UP_PIN     7
 #define BTN_DOWN_PIN  10
 #define BAT_ADC_PIN    1     // board pin "A0", reads battery via 2:1 divider
-#define TFT_BL_PIN     8     // 屏幕背光控制 (Nano D5), HIGH=亮 LOW=灭
+#define TFT_BL_PIN     8     // 屏幕背光控制 (Nano D5), LOW=亮 HIGH=灭 (反相)
+#define TFT_BL_ON      LOW
+#define TFT_BL_OFF     HIGH
 
 // Voltage divider: BAT+ -[R1]- ADC -[R2]- GND
 // 理想情况 R1=R2 时 BAT_DIVIDER = 2.0, 但 ±5% 精度下实际 1.9-2.1
@@ -2715,8 +2717,8 @@ void enterDeepSleep() {
   tft.writeCommand(0x28);   // DISPOFF
   tft.writeCommand(0x10);   // SLPIN
   delay(120);
-  digitalWrite(TFT_BL_PIN, LOW);    // 关背光
-  pinMode(TFT_BL_PIN, INPUT);       // 高阻, deep sleep 不漏电
+  digitalWrite(TFT_BL_PIN, TFT_BL_OFF);  // 关背光
+  pinMode(TFT_BL_PIN, INPUT);            // 高阻, deep sleep 不漏电
 
   // 关 OLED + WiFi
   // tft.sleepMode (no-op v4)
@@ -2848,7 +2850,7 @@ void setup() {
 
   // ---- 屏幕背光: 默认亮 ----
   pinMode(TFT_BL_PIN, OUTPUT);
-  digitalWrite(TFT_BL_PIN, HIGH);
+  digitalWrite(TFT_BL_PIN, TFT_BL_ON);
 
   // ---- ST7789 SPI 显示初始化 ----
   mySPI.begin(TFT_SCK, -1, TFT_MOSI, TFT_CS);
@@ -3057,9 +3059,9 @@ void loop() {
     g_lastInteractMs = now;
     if (g_screenOff) {
       g_screenOff = false;
-      digitalWrite(TFT_BL_PIN, HIGH);       // 开背光
+      digitalWrite(TFT_BL_PIN, TFT_BL_ON);  // 开背光
       setCpuFrequencyMhz(CPU_FREQ_ACTIVE);  // 唤醒回 240MHz
-      Serial.println("[POWER] CPU 240MHz / OLED on");
+      Serial.println("[POWER] CPU 240MHz / BL on");
       // Consume the wake-up button event (don't trigger an action)
       if (anyBtnEvent) {
         g_btnMode.evShort = g_btnMode.evLong = false;
@@ -3071,7 +3073,7 @@ void loop() {
   if (!g_screenOff && !g_editingTime && !g_diving &&
       (now - g_lastInteractMs > g_screenOffMs)) {
     g_screenOff = true;
-    digitalWrite(TFT_BL_PIN, LOW);         // 关背光 (~40mA)
+    digitalWrite(TFT_BL_PIN, TFT_BL_OFF);  // 关背光 (~40mA)
     setCpuFrequencyMhz(CPU_FREQ_IDLE);     // 降 80MHz 省电 ~30%
     Serial.println("[POWER] CPU 80MHz / BL off");
   }
