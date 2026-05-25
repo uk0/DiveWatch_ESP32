@@ -68,9 +68,10 @@ TP4056_H     = 27.2
 TP4056_T     = 3.5
 TP4056_PCB_T = 1.6
 
-# ===== USB-C (在 -Y 端面, 中间高度) =====
-USBC_W = 9.0    # 标准 Type-C 母座
-USBC_H = 3.3
+# ===== 无线充电线圈凹槽 (替代 USB-C, 在下底外底面居中) =====
+# 圆形凹陷, 用户指定底壁剩余 1.2mm (让无线信号穿透)
+WIRELESS_COIL_OD     = 45.0           # 线圈外径 (可调, Qi 标准 40-44mm)
+WIRELESS_COIL_DEPTH  = 2.5 - 1.2      # = 1.3mm (= WALL 2.5 − 剩余壁 1.2)
 
 # ===== 外壳总尺寸 =====
 WALL       = 2.5
@@ -215,13 +216,12 @@ def make_bottom():
                               mode=Mode.SUBTRACT)
         extrude(amount=SEAL_GROOVE_D + 0.1, mode=Mode.SUBTRACT)
 
-        # 3 按钮孔 (穿透 -X 侧壁, 起始在壁外侧 0.5mm)
-        btn_z = BOT_THICK - 8.0  # 按钮中心高度
+        # 3 按钮孔 (穿透 -X 侧壁, Z 方向居中)
+        btn_z = BOT_THICK / 2   # 按钮居中, 装配时按钮压杆好对齐
         with BuildSketch(Plane.YZ.offset(-(CASE_W / 2 + 0.5))):
             for ly in BTN_Y_LOCS:
                 with Locations((ly, btn_z)):
                     Circle(BTN_HOLE_D / 2)
-        # 仅 extrude 到刚穿透壁 (WALL + 0.5 起 + 0.6 = 内腔内 0.1mm)
         extrude(amount=WALL + 0.6, mode=Mode.SUBTRACT)
 
         # === 压力传感器 PCB 凹槽 (从 +X 内壁挖, 居中) ===
@@ -239,12 +239,11 @@ def make_bottom():
                 Circle(PRESS_SENSOR_D / 2)
         extrude(amount=-(WALL + 0.2), mode=Mode.SUBTRACT)
 
-        # USB-C 矩形孔 (-Y 端壁, 中间高度)
-        usbc_z = BOT_THICK / 2
-        with BuildSketch(Plane.XZ.offset(-(CASE_H / 2 + 0.5))):
-            with Locations((0, usbc_z)):
-                Rectangle(USBC_W, USBC_H)
-        extrude(amount=WALL + 0.6, mode=Mode.SUBTRACT)
+        # === 无线充电线圈凹槽 (外底面居中圆形凹陷, 替代 USB-C) ===
+        # 从外底面 z=0 向内挖 1.3mm, 剩余 1.2mm 底壁让无线信号穿透
+        with BuildSketch(Plane.XY.offset(0)):
+            Circle(WIRELESS_COIL_OD / 2)
+        extrude(amount=WIRELESS_COIL_DEPTH, mode=Mode.SUBTRACT)
 
         # 4 角螺丝攻丝柱 + 攻丝孔
         with BuildSketch(Plane.XY.offset(WALL)):
