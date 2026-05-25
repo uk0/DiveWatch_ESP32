@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>DiveWatch BLE WiFi 配置</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 480px; margin: 20px auto; padding: 0 20px; background:#f5f5f5; }
+  h1 { color: #FF6600; }
+  .card { background:#fff; border-radius:8px; padding:16px; margin:12px 0;
+          box-shadow:0 1px 3px rgba(0,0,0,0.1); }
+  button { display: block; width: 100%; padding: 14px; margin: 8px 0; font-size: 16px;
+           background: #FF6600; color: #fff; border: 0; border-radius: 6px; cursor: pointer; }
+  button:disabled { background: #999; }
+  button.danger { background:#c00; }
+  button.gray { background:#666; }
+  input { width: 100%; padding: 10px; margin: 6px 0; box-sizing:border-box;
+          border:1px solid #ccc; border-radius:4px; font-size:15px; }
+  .row { display: flex; justify-content: space-between; padding: 6px 0; }
+  .status { font-weight:bold; color:#FF6600; }
+  .log { background: #111; color: #0f0; padding: 12px; border-radius: 6px;
+         font-family: monospace; font-size: 11px; height: 180px; overflow-y: auto; }
+  .ip { font-family: monospace; background:#eef; padding:6px 12px; border-radius:4px;
+         display:inline-block; user-select:all; }
+</style>
+</head>
+<body>
+<h1>🔄 DiveWatch BLE WiFi 配置</h1>
+
+<div class="card">
+<p><b>步骤:</b></p>
+<ol>
+  <li>设备上 <b>长按 MODE+UP 3 秒</b> 或开机时按 <b>UP+DOWN</b> 进 OTA 模式</li>
+  <li>下方点 "连接", 选择 "DiveWatch-OTA"</li>
+  <li>填 WiFi 名/密码, 点 "连接 WiFi"</li>
+  <li>设备屏幕显示 IP 后, 用 PC 推固件:<br>
+      <code>arduino-cli upload -p &lt;IP&gt; --fqbn ... DiveWatch_v4</code><br>
+      或: <code>espota.py -i &lt;IP&gt; -p 3232 -f DiveWatch_v4.ino.bin</code>
+  </li>
+</ol>
+</div>
+
+<div class="card">
+<button id="connect">🔌 连接 DiveWatch-OTA</button>
+<div class="row"><span>BLE 状态:</span><span class="status" id="bleSt">未连接</span></div>
+<div class="row"><span>设备状态:</span><span class="status" id="devSt">-</span></div>
+<div class="row" id="ipRow" style="display:none">
+  <span>设备 IP:</span><span class="ip" id="devIp">-</span>
+</div>
+</div>
+
+<div class="card">
+<h3>WiFi 配置</h3>
+<input type="text" id="ssid" placeholder="WiFi 名 (SSID)" autocomplete="off">
+<input type="password" id="psk" placeholder="WiFi 密码">
+<button id="connectWifi" disabled>📶 连接 WiFi 并启动 OTA</button>
+<button id="forget" class="gray" disabled>🗑 清除已保存 WiFi</button>
+<button id="reboot" class="danger" disabled>↻ 重启设备 (回主固件)</button>
+</div>
+
+<div class="card">
+<h3>日志</h3>
+<div class="log" id="log"></div>
+</div>
+
+<script>
+const SVC = '1d14d6ee-fd63-4fa1-bfa4-8f47b42119f0';
+const SSID_CH = 'f7bf3564-fb6d-4e53-88a4-5e37e0326063';
+const PSK_CH  = '984227f3-34fc-4045-a5d0-2c581f81a153';
+const CMD_CH  = '0c533cef-d6b0-4ba2-9f08-7d6cea1b3e7e';
+const STAT_CH = '3b1f9c5e-8a72-4d11-9b3a-7c4e2f1a5d80';
+
+let device, server, ssidCh, pskCh, cmdCh;
+function log(s) {
+  const el = document.getElementById('log');
+  el.innerHTML += `[${new Date().toLocaleTimeString()}] ${s}<br>`;
+  el.scrollTop = el.scrollHeight;
+}
+
+document.getElementById('connect').onclick = async () => {
+  try {
+    log('扫描...');
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ name: 'DiveWatch-OTA' }],
+      optionalServices: [SVC]
+    });
+    server = await device.gatt.connect();
+    const svc = await server.getPrimaryService(SVC);
+    ssidCh = await svc.getCharacteristic(SSID_CH);
+    pskCh  = await svc.getCharacteristic(PSK_CH);
+    cmdCh  = await svc.getCharacteristic(CMD_CH);
+    const statCh = await svc.getCharacteristic(STAT_CH);
+    await statCh.startNotifications();
+    statCh.addEventListener('characteristicvaluechanged', onStat);
+    document.getElementById('bleSt').textContent = '已连接';
+    ['connectWifi','forget','reboot'].forEach(id =>
+      document.getElementById(id).disabled = false);
+    log('✓ BLE 已连接');
+  } catch (e) { log('错误: ' + e.message); }
+};
+
+document.getElementById('connectWifi').onclick = async () => {
+  const ssid = document.getElementById('ssid').value.trim();
+  const psk = document.getElementById('psk').value;
+  if (!ssid) { alert('请填 SSID'); return; }
+  const enc = new TextEncoder();
+  await ssidCh.writeValue(enc.encode(ssid));
+  await pskCh.writeValue(enc.encode(psk));
+  await cmdCh.writeValue(new Uint8Array([0x43]));  // 'C'
+  log(`已发送 WiFi 凭据 (SSID="${ssid}")`);
+};
+
+document.getElementById('forget').onclick = async () => {
+  await cmdCh.writeValue(new Uint8Array([0x46]));  // 'F'
+  log('已发送 FORGET');
+};
+document.getElementById('reboot').onclick = async () => {
+  await cmdCh.writeValue(new Uint8Array([0x52]));  // 'R'
+  log('已发送 REBOOT, 设备将重启');
+};
+
+function onStat(ev) {
+  const s = new TextDecoder().decode(ev.target.value);
+  log('设备 → ' + s);
+  document.getElementById('devSt').textContent = s;
+  if (s.startsWith('WIFI_OK ')) {
+    const ip = s.substring(8);
+    document.getElementById('devIp').textContent = ip;
+    document.getElementById('ipRow').style.display = '';
+  }
+}
+</script>
+</body>
+</html>

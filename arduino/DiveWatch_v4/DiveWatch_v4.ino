@@ -2502,6 +2502,40 @@ void drawDiveExitSummary() {
   u8g2.drawUTF8(80, 232, "按任意键回到主屏");
 }
 
+// ========== OTA 模式 UI (由 ota_ble.ino 调用) ==========
+void otaDrawScreen(const char *line1, const char *line2, int pct) {
+  tft.fillScreen(C(RGB_BLACK));
+  // 顶部标题
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+  u8g2.setBackgroundColor(C(RGB_BLACK));
+  u8g2.setForegroundColor(C(RGB_RED));
+  u8g2.drawUTF8(80, 30, "🔄 BLE OTA 模式");
+  // 主信息行 (中央大字)
+  u8g2.setForegroundColor(C(RGB_WHITE));
+  u8g2.setFont(u8g2_font_logisoso24_tn);
+  int w1 = u8g2.getUTF8Width(line1 ? line1 : "");
+  u8g2.drawUTF8(160 - w1/2, 110, line1 ? line1 : "");
+  u8g2.setFont(u8g2_font_wqy16_t_gb2312);
+  int w2 = u8g2.getUTF8Width(line2 ? line2 : "");
+  u8g2.drawUTF8(160 - w2/2, 140, line2 ? line2 : "");
+  // 进度条
+  if (pct >= 0) {
+    int bx = 40, by = 170, bw = 240, bh = 20;
+    tft.drawRect(bx, by, bw, bh, C(RGB_WHITE));
+    int fw = (bw - 2) * pct / 100;
+    if (fw > 0) tft.fillRect(bx + 1, by + 1, fw, bh - 2, C(RGB_RED));
+    char pbuf[8]; snprintf(pbuf, sizeof(pbuf), "%d%%", pct);
+    u8g2.setBackgroundColor(C(RGB_BLACK));
+    u8g2.setForegroundColor(C(RGB_WHITE));
+    int pw = u8g2.getUTF8Width(pbuf);
+    u8g2.drawUTF8(160 - pw/2, by + bh + 18, pbuf);
+  }
+  // 底部提示
+  u8g2.setFont(u8g2_font_wqy13_t_gb2312);
+  u8g2.setForegroundColor(C(RGB_WHITE));
+  u8g2.drawUTF8(40, 220, "BLE 设备: DiveWatch-OTA");
+}
+
 void drawSplash() {
   tft.fillScreen(C(RGB_ORANGE));
 
@@ -2683,6 +2717,11 @@ void setup() {
   Serial.begin(115200);
   delay(120);
 
+  // ---- 救援模式检测 (开机按 UP+DOWN → 跳过所有初始化直接 BLE OTA) ----
+  // 主固件 brick 时仍能救活, 优先级最高
+  bool bootRecovery = otaCheckBootRecovery();
+  bool nvsRecovery  = otaCheckMagicFlag();
+
   pinMode(BUZZER_PIN, OUTPUT);
   digitalWrite(BUZZER_PIN, LOW);
   pinMode(BTN_MODE_PIN, INPUT_PULLUP);
@@ -2698,11 +2737,21 @@ void setup() {
   tft.setSPISpeed(40000000);             // 40MHz 提升 4 倍速度, 全屏刷 ~30ms
   tft.setRotation(1);                    // 横屏 320x240
   tft.invertDisplay(true);
-  tft.fillScreen(C(RGB_ORANGE));
+  tft.fillScreen(C(RGB_BLACK));
 
   u8g2.begin(tft);
   u8g2.setFontMode(0);                   // solid 背景模式
   u8g2.setFontDirection(0);
+
+  // 如果是救援或下次启动 OTA → 立刻进入 OTA 模式, 不做其他初始化
+  if (bootRecovery || nvsRecovery) {
+    u8g2.setBackgroundColor(C(RGB_BLACK));
+    u8g2.setForegroundColor(C(RGB_WHITE));
+    otaStartBLE();
+    while (true) { otaLoopTick(); delay(20); }   // 死循环直到刷写成功 ESP.restart
+  }
+
+  tft.fillScreen(C(RGB_ORANGE));
   u8g2.setBackgroundColor(C(RGB_ORANGE));
   u8g2.setForegroundColor(C(RGB_BLACK));
 
@@ -2789,6 +2838,7 @@ void setup() {
   beepBlocking(3, 200, 100);
 
   g_lastInteractMs = millis();
+  otaArmValidTimer();   // 5s 后自动标记 valid (防止误回滚)
 }
 
 // ================== Loop =============================================
@@ -2810,6 +2860,22 @@ void loop() {
     // 不会返回
   }
   if (g_btnMode.stable) s_shutdownArmed = false;  // 松手重置
+
+  // ---- 长按 MODE + UP 同时 3 秒 → 进入 BLE OTA 模式 ----
+  static uint32_t s_otaArmStart = 0;
+  if (!g_btnMode.stable && !g_btnUp.stable) {
+    if (s_otaArmStart == 0) s_otaArmStart = now;
+    if (now - s_otaArmStart > 3000 && !g_editingTime && !g_inSettings) {
+      Serial.println("[ACTION] MODE+UP 3s → schedule BLE OTA boot");
+      beepBlocking(3, 100);
+      otaScheduleNextBoot();   // 写 NVS flag + 重启 → 救援模式启动
+    }
+  } else {
+    s_otaArmStart = 0;
+  }
+
+  // ---- OTA 标记 valid (启动 5s 后, 防止误回滚) ----
+  otaMarkValidIfReady();
 
   // ---- Power saving: wake / sleep OLED ----
   bool anyBtnEvent = g_btnMode.evShort || g_btnMode.evLong ||
