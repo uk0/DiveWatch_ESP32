@@ -97,6 +97,15 @@ SEAL_LIP_W    = 2.0   # 凸起宽度 (小于槽宽 0.5mm 装配间隙)
 SEAL_LIP_H    = 1.5   # 凸起高度 (小于槽深 0.5mm 留给 O 圈压缩量)
 SEAL_LIP_GAP  = 0.5   # 凸起两侧装配松量 (各 0.25mm)
 
+# ===== 表带耳 (两端各 2 个) =====
+STRAP_WIDTH    = 24.0   # 表带宽 = 两耳间距
+LUG_THICK      = 4.0    # 单个耳片 X 厚度
+LUG_OUT        = 6.0    # 耳片向 ±Y 凸出长度
+LUG_HEIGHT     = 8.0    # 耳片 Z 高度
+LUG_Z_CENTER   = 22.0   # 耳片 Z 中心位置 (从 bottom 底面起)
+SPRING_BAR_D   = 2.5    # 弹簧棒孔直径
+LUG_FILLET_R   = 1.5    # 耳片末端圆角
+
 # 螺丝
 SCREW_THRU_D     = 2.4
 SCREW_HEAD_D     = 4.2
@@ -157,25 +166,25 @@ def make_top():
                 Rectangle(PCB_FLEX_LEN_X, PCB_FLEX_LEN_Y)
         extrude(amount=flex_total_depth + 0.1, mode=Mode.SUBTRACT)
 
-        # === 密封 U 形凹槽 (上盖底面, 等下底凸起 lip 卡入压紧 O 圈) ===
-        groove_out_w = CASE_W - 2 * SEAL_INSET
-        groove_out_h = CASE_H - 2 * SEAL_INSET
-        groove_in_w  = groove_out_w - 2 * SEAL_GROOVE_W
-        groove_in_h  = groove_out_h - 2 * SEAL_GROOVE_W
-        # 从底面 z=0 向 +Z (主体内部) 挖入 SEAL_GROOVE_D
-        with BuildSketch(Plane.XY.offset(0)):
-            RectangleRounded(groove_out_w, groove_out_h,
-                              max(CORNER_R - SEAL_INSET, 0.5))
-            RectangleRounded(groove_in_w, groove_in_h,
-                              max(CORNER_R - SEAL_INSET - SEAL_GROOVE_W, 0.5),
+        # === 密封凸起 lip (上盖底面凸出, 卡入下底凹槽压紧 O 圈) ===
+        lip_out_w = CASE_W - 2 * SEAL_INSET - SEAL_LIP_GAP
+        lip_out_h = CASE_H - 2 * SEAL_INSET - SEAL_LIP_GAP
+        lip_in_w  = lip_out_w - 2 * SEAL_LIP_W
+        lip_in_h  = lip_out_h - 2 * SEAL_LIP_W
+        # 从 Z=0 (底面) 向下 -Z 凸出 SEAL_LIP_H
+        with BuildSketch(Plane.XY.offset(-SEAL_LIP_H)):
+            RectangleRounded(lip_out_w, lip_out_h,
+                              max(CORNER_R - SEAL_INSET - SEAL_LIP_GAP/2, 0.5))
+            RectangleRounded(lip_in_w, lip_in_h,
+                              max(CORNER_R - SEAL_INSET - SEAL_LIP_GAP/2 - SEAL_LIP_W, 0.5),
                               mode=Mode.SUBTRACT)
-        extrude(amount=SEAL_GROOVE_D + 0.1, mode=Mode.SUBTRACT)
+        extrude(amount=SEAL_LIP_H, mode=Mode.ADD)
 
-        # 4 角螺丝沉头孔 (顶面穿到底)
-        with BuildSketch():
+        # 4 角螺丝沉头孔 (顶面穿到底, 含 lip 高度)
+        with BuildSketch(Plane.XY.offset(-SEAL_LIP_H)):
             with Locations(*SCREW_LOCS):
                 Circle(SCREW_THRU_D / 2)
-        extrude(amount=TOP_THICK, mode=Mode.SUBTRACT)
+        extrude(amount=TOP_THICK + SEAL_LIP_H, mode=Mode.SUBTRACT)
         with BuildSketch(Plane.XY.offset(TOP_THICK - SCREW_HEAD_DEPTH)):
             with Locations(*SCREW_LOCS):
                 Circle(SCREW_HEAD_D / 2)
@@ -204,23 +213,21 @@ def make_bottom():
             RectangleRounded(inner_w, inner_h, max(CORNER_R - WALL, 1.5))
         extrude(amount=BOT_THICK, mode=Mode.SUBTRACT)
 
-        # === 密封凸起 lip (顶面向上凸出, 卡入上盖底面凹槽压紧 O 圈) ===
-        # 凸起比上盖凹槽 (宽 SEAL_GROOVE_W=3.0) 略窄 SEAL_LIP_GAP 装配松量
-        lip_out_w = CASE_W - 2 * SEAL_INSET - SEAL_LIP_GAP
-        lip_out_h = CASE_H - 2 * SEAL_INSET - SEAL_LIP_GAP
-        lip_in_w  = lip_out_w - 2 * SEAL_LIP_W
-        lip_in_h  = lip_out_h - 2 * SEAL_LIP_W
-        # 从顶面 z=BOT_THICK 向上 +Z 凸出 SEAL_LIP_H
-        with BuildSketch(Plane.XY.offset(BOT_THICK)):
-            RectangleRounded(lip_out_w, lip_out_h,
-                              max(CORNER_R - SEAL_INSET - SEAL_LIP_GAP/2, 0.5))
-            RectangleRounded(lip_in_w, lip_in_h,
-                              max(CORNER_R - SEAL_INSET - SEAL_LIP_GAP/2 - SEAL_LIP_W, 0.5),
+        # === 密封 U 形凹槽 (顶面向下挖一圈, 装 ⌀2mm O 圈) ===
+        groove_out_w = CASE_W - 2 * SEAL_INSET
+        groove_out_h = CASE_H - 2 * SEAL_INSET
+        groove_in_w  = groove_out_w - 2 * SEAL_GROOVE_W
+        groove_in_h  = groove_out_h - 2 * SEAL_GROOVE_W
+        with BuildSketch(Plane.XY.offset(BOT_THICK - SEAL_GROOVE_D)):
+            RectangleRounded(groove_out_w, groove_out_h,
+                              max(CORNER_R - SEAL_INSET, 0.5))
+            RectangleRounded(groove_in_w, groove_in_h,
+                              max(CORNER_R - SEAL_INSET - SEAL_GROOVE_W, 0.5),
                               mode=Mode.SUBTRACT)
-        extrude(amount=SEAL_LIP_H, mode=Mode.ADD)
+        extrude(amount=SEAL_GROOVE_D + 0.1, mode=Mode.SUBTRACT)
 
-        # 3 按钮孔 (穿透 -X 侧壁, Z 方向居中)
-        btn_z = BOT_THICK / 2   # 按钮居中, 装配时按钮压杆好对齐
+        # 3 按钮孔 (穿透 -X 侧壁, Z 方向偏上一些)
+        btn_z = BOT_THICK / 2 + 4.0   # 上移 4mm (从居中 20.45 -> 24.45)
         with BuildSketch(Plane.YZ.offset(-(CASE_W / 2 + 0.5))):
             for ly in BTN_Y_LOCS:
                 with Locations((ly, btn_z)):
@@ -270,6 +277,30 @@ def make_bottom():
             with Locations(*bat_pin_locs):
                 Circle(1.0)
         extrude(amount=1.0)
+
+        # === 表带耳 (±Y 端面各 2 个, 间距 STRAP_WIDTH) ===
+        # 每端 2 个耳片对称分布, 中心 X = ±STRAP_WIDTH/2
+        # 耳片整体凸出 ±Y 方向, 形成手表表带连接点
+        lug_x_offset = STRAP_WIDTH / 2
+        for sx in (-1, 1):       # X 方向左右两个耳片
+            for sy in (-1, 1):   # Y 方向 -Y / +Y 两端
+                cx = sx * lug_x_offset
+                cy = sy * (CASE_H / 2 + LUG_OUT / 2)
+                # 耳片本体
+                with BuildSketch(Plane.XY.offset(LUG_Z_CENTER - LUG_HEIGHT/2)):
+                    with Locations((cx, cy)):
+                        RectangleRounded(LUG_THICK, LUG_OUT, LUG_FILLET_R)
+                extrude(amount=LUG_HEIGHT)
+
+        # === 弹簧棒孔 (沿 X 方向穿透 2 个对应耳片) ===
+        # 每端一根棒, 中心 Y 在耳片中央
+        for sy in (-1, 1):
+            cy = sy * (CASE_H / 2 + LUG_OUT / 2)
+            # 从 -X 方向穿入, 穿透整个 STRAP_WIDTH + 2*LUG_THICK
+            with BuildSketch(Plane.YZ.offset(-(STRAP_WIDTH/2 + LUG_THICK + 1))):
+                with Locations((cy, LUG_Z_CENTER)):
+                    Circle(SPRING_BAR_D / 2)
+            extrude(amount=STRAP_WIDTH + 2*LUG_THICK + 2, mode=Mode.SUBTRACT)
 
     p = bot.part
     p.label = "bottom_case"
