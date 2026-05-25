@@ -310,24 +310,45 @@ void otaStartBLE() {
 void otaLoopTick() {
   if (!g_otaMode) return;
 
-  // 长按 MODE 3 秒 → 退出 OTA, 重启回主固件
-  static uint32_t modePressMs = 0;
+  // MODE 短按双击 (400ms 内 2 次) → 快速退出 OTA
+  // 或长按 1 秒 → 也退出 (单手友好)
   static bool     modePinReady = false;
+  static bool     modeLastState = true;     // pull-up 默认 HIGH=true
+  static uint32_t modePressMs   = 0;
+  static uint32_t lastClickMs   = 0;
+  static uint8_t  clickCount    = 0;
   if (!modePinReady) { pinMode(BTN_MODE_PIN, INPUT_PULLUP); modePinReady = true; }
-  if (digitalRead(BTN_MODE_PIN) == LOW) {
-    if (modePressMs == 0) {
-      modePressMs = millis();
-      Serial.println("[OTA] MODE pressed (hold 3s to exit)");
-    } else if (millis() - modePressMs > 3000) {
-      Serial.println("[OTA] MODE 3s → exit OTA, restart");
-      otaDrawScreen("退出 OTA", "回主固件...", -1);
-      delay(500);
-      ESP.restart();
+  bool modeNow = (digitalRead(BTN_MODE_PIN) == HIGH);    // true=松开, false=按下
+
+  // 边沿检测
+  if (modeLastState && !modeNow) {           // 按下沿
+    modePressMs = millis();
+  } else if (!modeLastState && modeNow) {    // 释放沿
+    uint32_t pressDur = millis() - modePressMs;
+    if (pressDur < 600) {                    // 短按
+      if (millis() - lastClickMs < 400) {
+        clickCount++;
+        Serial.printf("[OTA] MODE double-click (count=%d)\n", clickCount);
+        if (clickCount >= 2) {
+          Serial.println("[OTA] MODE 双击 → 退出 OTA, restart");
+          otaDrawScreen("退出 OTA", "回主固件...", -1);
+          delay(400);
+          ESP.restart();
+        }
+      } else {
+        clickCount = 1;
+      }
+      lastClickMs = millis();
     }
-  } else {
-    if (modePressMs != 0) Serial.println("[OTA] MODE released");
-    modePressMs = 0;
   }
+  // 长按 1 秒 (单击不松手) → 直接退
+  if (!modeNow && modePressMs > 0 && millis() - modePressMs > 1000) {
+    Serial.println("[OTA] MODE long press 1s → exit");
+    otaDrawScreen("退出 OTA", "回主固件...", -1);
+    delay(400);
+    ESP.restart();
+  }
+  modeLastState = modeNow;
 
   if (g_otaWifiOk) {
     ArduinoOTA.handle();
@@ -375,8 +396,11 @@ bool otaCheckBootRecovery() {
   pinMode(BTN_UP_PIN, INPUT_PULLUP);
   pinMode(BTN_DOWN_PIN, INPUT_PULLUP);
   delay(80);
-  if (digitalRead(BTN_UP_PIN) == LOW && digitalRead(BTN_DOWN_PIN) == LOW) {
-    Serial.println("\n[BOOT-RECOVERY] UP+DOWN held, entering BLE+WiFi OTA");
+  // 开机时按 UP 或 DOWN 任意一个 → 进 OTA 救援模式
+  bool up = (digitalRead(BTN_UP_PIN) == LOW);
+  bool dn = (digitalRead(BTN_DOWN_PIN) == LOW);
+  if (up || dn) {
+    Serial.printf("\n[BOOT-RECOVERY] %s held, entering OTA\n", up ? "UP" : "DOWN");
     return true;
   }
   return false;

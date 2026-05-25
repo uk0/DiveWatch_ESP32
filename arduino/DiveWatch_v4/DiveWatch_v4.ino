@@ -1212,8 +1212,25 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
   }
 
   // NDL 大字 + 安停状态徽章 (y=132..162, 一行)
+  // 仅在状态/数值变化时重画该区域 (减少 100ms 全帧 fillRect 闪烁)
   bool ssActive = (g_ss == SS_RUNNING || g_ss == SS_ARMED);
   bool decoAlarm = (ndl <= 0.0f) && g_diving;
+  uint32_t ssRemainSec = ssActive
+      ? ((g_ssAccumMs >= g_safetyStopSec*1000UL) ? 0
+          : (g_safetyStopSec*1000UL - g_ssAccumMs) / 1000)
+      : 0;
+  static int s_lastNdlInt = -1;
+  static uint32_t s_lastSsRemainSec = 0xFFFFFFFFU;
+  static uint8_t s_lastSsState = 255;
+  static bool s_lastDecoAlarm = false;
+  int ndlInt = (int)ndl;
+  bool ndlBlockDirty = (ndlInt != s_lastNdlInt) || (g_ss != s_lastSsState)
+                        || (ssRemainSec != s_lastSsRemainSec) || (decoAlarm != s_lastDecoAlarm);
+  if (!ndlBlockDirty) goto skip_ndl_block;
+  s_lastNdlInt = ndlInt;
+  s_lastSsRemainSec = ssRemainSec;
+  s_lastSsState = g_ss;
+  s_lastDecoAlarm = decoAlarm;
   tft.fillRect(0, 132, 320, 32, C(RGB_ORANGE));
 
   // 左侧: NDL 标签 + 大字数字 + 分
@@ -1258,6 +1275,7 @@ void drawHud(float depth, float maxDepth, float temp, float ndl, float ascentMpm
 
   s_lastNdl = ndl;
   s_lastNdlRing = ndl;  // 仍然更新 (避免外部条件触发)
+  skip_ndl_block:;
 
   // ===== 上升速度彩条 y=170..184 =====
   if (fabsf(ascentMpm - s_lastAscent) > 0.1f) {
@@ -3213,11 +3231,13 @@ void loop() {
   static bool     prevSettings = false;
 
   bool pageChanged = (g_page != prevPage) || (g_editingTime != prevEdit) || (g_inSettings != prevSettings);
-  // HUD = 200ms 流畅; 编辑/设置 = 250ms 兜底 (按键也触发 dirty 重画); 其他静态页 = 5s 慢刷
+  // HUD = 100ms (10Hz 流畅, SPI 40MHz 全屏 30ms 极限留余量)
+  // 编辑/设置 = 150ms (按键 dirty 也立即触发)
+  // 其他静态页 = 3s 慢刷
   uint32_t renderInterval =
-      (g_page == PAGE_HUD)                  ? 200U
-    : (g_editingTime || g_inSettings)        ? 250U
-                                             : 5000U;
+      (g_page == PAGE_HUD)                  ? 100U
+    : (g_editingTime || g_inSettings)        ? 150U
+                                             : 3000U;
   bool timeToRender = (now - lastRender > renderInterval);
 
   // 屏保态: 黑底待机时钟 (每 30s 更新一次时间)
