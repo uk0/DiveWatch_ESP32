@@ -2711,44 +2711,46 @@ void runSelfTest() {
 
 // ================== Setup ============================================
 void setup() {
-  // 最先检测唤醒源: 如果是按键唤醒但按时不够 2s, 立刻回睡 (不开机)
   verifyWakeOrSleepAgain();
 
   Serial.begin(115200);
-  delay(120);
-
-  // ---- 救援模式检测 (开机按 UP+DOWN → 跳过所有初始化直接 BLE OTA) ----
-  // 主固件 brick 时仍能救活, 优先级最高
-  bool bootRecovery = otaCheckBootRecovery();
-  bool nvsRecovery  = otaCheckMagicFlag();
+  delay(200);
+  Serial.println("\n[BOOT] DiveWatch v5 starting");
 
   pinMode(BUZZER_PIN, OUTPUT);
   digitalWrite(BUZZER_PIN, LOW);
   pinMode(BTN_MODE_PIN, INPUT_PULLUP);
   pinMode(BTN_UP_PIN,   INPUT_PULLUP);
   pinMode(BTN_DOWN_PIN, INPUT_PULLUP);
+  Serial.println("[BOOT] GPIO init done");
 
   Wire.begin(I2C_SDA, I2C_SCL);
   Wire.setClock(400000);
+  Serial.println("[BOOT] I2C init done");
 
   // ---- ST7789 SPI 显示初始化 ----
   mySPI.begin(TFT_SCK, -1, TFT_MOSI, TFT_CS);
   tft.init(240, 320);
-  tft.setSPISpeed(40000000);             // 40MHz 提升 4 倍速度, 全屏刷 ~30ms
-  tft.setRotation(1);                    // 横屏 320x240
+  delay(80);   // 等 controller ready (重要, 不加可能白屏)
+  tft.setSPISpeed(40000000);
+  tft.setRotation(1);
   tft.invertDisplay(true);
   tft.fillScreen(C(RGB_BLACK));
-
   u8g2.begin(tft);
-  u8g2.setFontMode(0);                   // solid 背景模式
+  u8g2.setFontMode(0);
   u8g2.setFontDirection(0);
+  Serial.println("[BOOT] TFT init done");
 
-  // 如果是救援或下次启动 OTA → 立刻进入 OTA 模式, 不做其他初始化
+  // ---- OTA 救援检测 (屏幕初始化后, 避免 BLE 失败时白屏看不到原因) ----
+  bool bootRecovery = (digitalRead(BTN_UP_PIN) == LOW && digitalRead(BTN_DOWN_PIN) == LOW);
+  bool nvsRecovery  = otaCheckMagicFlag();
+  Serial.printf("[BOOT] recovery: boot=%d nvs=%d\n", bootRecovery, nvsRecovery);
+
   if (bootRecovery || nvsRecovery) {
     u8g2.setBackgroundColor(C(RGB_BLACK));
     u8g2.setForegroundColor(C(RGB_WHITE));
     otaStartBLE();
-    while (true) { otaLoopTick(); delay(20); }   // 死循环直到刷写成功 ESP.restart
+    while (true) { otaLoopTick(); delay(20); }
   }
 
   tft.fillScreen(C(RGB_ORANGE));

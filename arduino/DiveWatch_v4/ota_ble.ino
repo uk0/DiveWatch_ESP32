@@ -203,16 +203,7 @@ void otaStartBLE() {
   if (g_otaMode) return;
   g_otaMode = true;
 
-  // 尝试自动用上次保存的凭据连 WiFi (无需 BLE 重新配置)
-  String savedSsid, savedPsk;
-  if (otaLoadWifiCreds(savedSsid, savedPsk)) {
-    g_otaSsid = savedSsid;
-    g_otaPsk = savedPsk;
-    Serial.printf("[OTA] auto-connect saved WiFi: %s\n", savedSsid.c_str());
-    otaStartWifiOTA();
-    // 不管成功失败都启动 BLE 让用户能改 WiFi
-  }
-
+  // 仅启动 BLE 服务等待用户命令; 自动 WiFi 连接由用户触发 (避免 setup 早期 block 20s)
   BLEDevice::init("DiveWatch-OTA");
   BLEDevice::setMTU(247);
   BLEServer *srv = BLEDevice::createServer();
@@ -235,8 +226,15 @@ void otaStartBLE() {
   adv->start();
 
   Serial.println("[OTA] BLE advertising as 'DiveWatch-OTA'");
-  if (!g_otaWifiOk) {
-    otaDrawScreen("OTA 模式", "BLE 配 WiFi 中...", 0);
+  otaDrawScreen("OTA 模式", "BLE 配 WiFi 中...", 0);
+
+  // BLE 启动后尝试自动连上次保存的 WiFi (非阻塞: 5s timeout)
+  String savedSsid, savedPsk;
+  if (otaLoadWifiCreds(savedSsid, savedPsk)) {
+    g_otaSsid = savedSsid;
+    g_otaPsk = savedPsk;
+    Serial.printf("[OTA] auto-connect saved WiFi: %s\n", savedSsid.c_str());
+    otaStartWifiOTA();
   }
 }
 
