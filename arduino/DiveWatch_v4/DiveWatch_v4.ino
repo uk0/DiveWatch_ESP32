@@ -29,6 +29,7 @@
 #include <Preferences.h>
 #include <WiFi.h>
 #include <esp_sleep.h>
+#include <driver/gpio.h>
 #include <math.h>
 #include <time.h>
 #include <sys/time.h>
@@ -110,9 +111,9 @@ struct DiveRecord {
 #define BTN_UP_PIN     7
 #define BTN_DOWN_PIN  10
 #define BAT_ADC_PIN    1     // board pin "A0", reads battery via 2:1 divider
-#define TFT_BL_PIN     8     // 屏幕背光控制 (Nano D5), LOW=亮 HIGH=灭 (反相)
-#define TFT_BL_ON      LOW
-#define TFT_BL_OFF     HIGH
+#define TFT_BL_PIN     8     // 屏幕背光控制 (Nano D5), HIGH=亮 LOW=灭
+#define TFT_BL_ON      HIGH
+#define TFT_BL_OFF     LOW
 
 // Voltage divider: BAT+ -[R1]- ADC -[R2]- GND
 // 理想情况 R1=R2 时 BAT_DIVIDER = 2.0, 但 ±5% 精度下实际 1.9-2.1
@@ -2718,7 +2719,9 @@ void enterDeepSleep() {
   tft.writeCommand(0x10);   // SLPIN
   delay(120);
   digitalWrite(TFT_BL_PIN, TFT_BL_OFF);  // 关背光
-  pinMode(TFT_BL_PIN, INPUT);            // 高阻, deep sleep 不漏电
+  // 锁住 GPIO 在 deep sleep 期间, 防止浮空回到默认状态导致 LED 亮
+  gpio_hold_en((gpio_num_t)TFT_BL_PIN);
+  gpio_deep_sleep_hold_en();
 
   // 关 OLED + WiFi
   // tft.sleepMode (no-op v4)
@@ -2849,6 +2852,9 @@ void setup() {
   Serial.println("[BOOT] I2C init done");
 
   // ---- 屏幕背光: 默认亮 ----
+  // 释放 deep sleep 期间的 GPIO hold (上次关机时锁过)
+  gpio_hold_dis((gpio_num_t)TFT_BL_PIN);
+  gpio_deep_sleep_hold_dis();
   pinMode(TFT_BL_PIN, OUTPUT);
   digitalWrite(TFT_BL_PIN, TFT_BL_ON);
 
