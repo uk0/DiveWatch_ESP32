@@ -221,6 +221,20 @@ def make_bottom():
             RectangleRounded(inner_w, inner_h, max(CORNER_R - WALL, 1.5))
         extrude(amount=BOT_THICK, mode=Mode.SUBTRACT)
 
+        # === 内腔顶部 ledge 支撑 lip 底部 (避免悬空打印失败) ===
+        # lip 底宽 = SEAL_LIP_BOT_W = 4mm, 仅 0.5mm 坐在外壁顶 (WALL-SEAL_INSET=0.5)
+        # 剩 3.5mm 悬空在内腔上方 → 加一圈 ledge 向内突出 3.5mm 把它顶起
+        LEDGE_W = SEAL_LIP_BOT_W - (WALL - SEAL_INSET)   # = 4 - 0.5 = 3.5
+        LEDGE_H = 1.5                                      # ledge 高度 (1.5mm 够支撑)
+        ledge_in_w = inner_w - 2 * LEDGE_W                 # 内腔顶部缩到 46mm 宽
+        ledge_in_h = inner_h - 2 * LEDGE_W                 # 内腔顶部缩到 74.5mm 长
+        with BuildSketch(Plane.XY.offset(BOT_THICK - LEDGE_H)):
+            RectangleRounded(inner_w, inner_h, max(CORNER_R - WALL, 1.5))
+            RectangleRounded(ledge_in_w, ledge_in_h,
+                              max(CORNER_R - WALL - LEDGE_W, 0.5),
+                              mode=Mode.SUBTRACT)
+        extrude(amount=LEDGE_H, mode=Mode.ADD)
+
         # === 梯形密封 lip (底宽 4mm 与主体融合, 顶宽 2mm 卡入 top 凹槽) ===
         # 由两段 extrude 模拟梯形: 底层 (高 0.5mm, 宽 BOT 4mm) + 顶层 (高 1.0mm, 宽 TOP 2mm)
         # 这样接触面 = 4mm 宽周长 → 远大于 2mm 凸起, 不易掉
