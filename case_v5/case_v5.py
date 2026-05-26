@@ -46,7 +46,7 @@ BTN_BODY_SIZE   = 6.6      # 按钮本体方坑边长 (6.2 + 0.4 间隙)
 BTN_BODY_DEPTH  = 3.0      # 方坑挖入壁内深度
 BTN_HOLE_CENTER = 4.0      # 中间按钮触发圆孔直径
 BTN_HOLE_SIDE   = 5.0      # 两侧按钮触发圆孔直径 (用户要求加大)
-BTN_SPACING     = 13.1     # 相邻按钮间距
+BTN_SPACING     = 12.6     # 相邻按钮间距 (13.1→12.6, 让最右按钮更靠中)
 BTN_COUNT       = 3        # 共 3 个
 
 # ===== 压力传感器 (装在 +X 长侧面居中) =====
@@ -245,11 +245,8 @@ def make_bottom():
                                   mode=Mode.SUBTRACT)
             extrude(amount=z_hi - z_lo, mode=Mode.ADD)
 
-        # === 3 按钮孔 (穿透 -X 侧壁) Z 中心向上移到 PCB 板载按钮高度对齐 ===
-        # PCB 顶面 z = BOT_THICK - PCB_T; SMT 按钮中心距 PCB 顶 ≈ 3mm
-        # 所以 btn_z ≈ BOT_THICK - PCB_T - 3 = 21 - 1.2 - 3 ≈ 16.8 (上移到偏顶部)
-        # 实际取 BOT_THICK - 5 = 16 保留容差
-        btn_z = BOT_THICK - 5.0
+        # === 3 按钮孔 (穿透 -X 侧壁) Z 中心居中于 bottom 厚度 ===
+        btn_z = BOT_THICK / 2.0   # 上下居中 = 21/2 = 10.5
         # 按钮本体方坑 (从外壁向内挖 BTN_BODY_DEPTH mm, 嵌入 6.2x6.2 按钮)
         with BuildSketch(Plane.YZ.offset(-(CASE_W / 2 + 0.1))):
             for ly in BTN_Y_LOCS:
