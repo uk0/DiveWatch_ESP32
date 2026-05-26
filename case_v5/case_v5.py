@@ -221,19 +221,26 @@ def make_bottom():
             RectangleRounded(inner_w, inner_h, max(CORNER_R - WALL, 1.5))
         extrude(amount=BOT_THICK, mode=Mode.SUBTRACT)
 
-        # === 内腔顶部 ledge 支撑 lip 底部 (避免悬空打印失败) ===
-        # lip 底宽 = SEAL_LIP_BOT_W = 4mm, 仅 0.5mm 坐在外壁顶 (WALL-SEAL_INSET=0.5)
-        # 剩 3.5mm 悬空在内腔上方 → 加一圈 ledge 向内突出 3.5mm 把它顶起
-        LEDGE_W = SEAL_LIP_BOT_W - (WALL - SEAL_INSET)   # = 4 - 0.5 = 3.5
-        LEDGE_H = 1.5                                      # ledge 高度 (1.5mm 够支撑)
-        ledge_in_w = inner_w - 2 * LEDGE_W                 # 内腔顶部缩到 46mm 宽
-        ledge_in_h = inner_h - 2 * LEDGE_W                 # 内腔顶部缩到 74.5mm 长
-        with BuildSketch(Plane.XY.offset(BOT_THICK - LEDGE_H)):
-            RectangleRounded(inner_w, inner_h, max(CORNER_R - WALL, 1.5))
-            RectangleRounded(ledge_in_w, ledge_in_h,
-                              max(CORNER_R - WALL - LEDGE_W, 0.5),
-                              mode=Mode.SUBTRACT)
-        extrude(amount=LEDGE_H, mode=Mode.ADD)
+        # === 内腔顶部 斜坡 ledge 支撑 lip 底部 (4 层模拟斜坡 防 3.5mm 悬空) ===
+        # 总高 4mm, 从 z=BOT_THICK-4 处 ledge 宽 1mm 逐层向内推到 z=BOT_THICK 处 3.5mm
+        # 顶层 3.5mm 完全支撑 lip, 下层逐渐缩窄斜坡延伸到外壁顶面下方 4mm
+        # 斜面打印每层悬空 ≤0.8mm 远小于 FDM 极限
+        LEDGE_W_TOP = SEAL_LIP_BOT_W - (WALL - SEAL_INSET)   # = 3.5 顶层宽
+        LEDGE_H_TOTAL = 4.0
+        LAYERS = 4
+        for i in range(LAYERS):
+            t = (i + 1) / LAYERS                              # 0.25, 0.5, 0.75, 1.0
+            lw = LEDGE_W_TOP * t                              # 0.875, 1.75, 2.625, 3.5
+            z_lo = BOT_THICK - LEDGE_H_TOTAL + i * (LEDGE_H_TOTAL / LAYERS)
+            z_hi = z_lo + (LEDGE_H_TOTAL / LAYERS)
+            ledge_in_w = inner_w - 2 * lw
+            ledge_in_h = inner_h - 2 * lw
+            with BuildSketch(Plane.XY.offset(z_lo)):
+                RectangleRounded(inner_w, inner_h, max(CORNER_R - WALL, 1.5))
+                RectangleRounded(ledge_in_w, ledge_in_h,
+                                  max(CORNER_R - WALL - lw, 0.5),
+                                  mode=Mode.SUBTRACT)
+            extrude(amount=z_hi - z_lo, mode=Mode.ADD)
 
         # === 梯形密封 lip (底宽 4mm 与主体融合, 顶宽 2mm 卡入 top 凹槽) ===
         # 由两段 extrude 模拟梯形: 底层 (高 0.5mm, 宽 BOT 4mm) + 顶层 (高 1.0mm, 宽 TOP 2mm)
