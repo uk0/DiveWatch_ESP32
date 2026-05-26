@@ -86,9 +86,9 @@ CORNER_R   = 4.0
 # PCB 周边: WALL(2.5) + SEAL_INSET(2) + SEAL_GROOVE_W(3) + 余量(0.5) = 8mm
 CASE_W     = PCB_W + 2 * (WALL + 4.0)             # 45 + 13 = 58
 CASE_H     = PCB_H + 2 * (WALL + 4.0)             # 73.5 + 13 = 86.5
-CASE_Z     = 22.0                                  # 总厚度缩一半 (44.4 → 22)
+CASE_Z     = 26.0                                  # 总厚 22→26 (+4 给电池/无线充线圈余量)
 TOP_THICK  = 5.0                                   # 顶盖含 PCB pocket + FPC 槽
-BOT_THICK  = CASE_Z - TOP_THICK                    # 下底厚 = 17.0
+BOT_THICK  = CASE_Z - TOP_THICK                    # 下底厚 = 21.0 (内腔 ≈18.5mm 装电池+线圈)
 
 # ============================================================
 # 防水密封: 上下盖凹凸契合结构 + O 圈
@@ -109,7 +109,7 @@ STRAP_WIDTH    = 24.0   # 表带宽 = 两耳间距
 LUG_THICK      = 4.0    # 单个耳片 X 厚度
 LUG_OUT        = 6.0    # 耳片向 ±Y 凸出长度
 LUG_HEIGHT     = 8.0    # 耳片 Z 高度
-LUG_Z_CENTER   = 8.5    # 耳片 Z 中心 (BOT_THICK 17 的中点)
+LUG_Z_CENTER   = 10.5   # 耳片 Z 中心 (BOT_THICK 21 的中点)
 SPRING_BAR_D   = 2.5    # 弹簧棒孔直径
 LUG_FILLET_R   = 1.5    # 耳片末端圆角
 
@@ -245,9 +245,11 @@ def make_bottom():
                                   mode=Mode.SUBTRACT)
             extrude(amount=z_hi - z_lo, mode=Mode.ADD)
 
-        # === 3 按钮孔 (穿透 -X 侧壁) Z 中心下移居中, 按钮本体方坑嵌入 ===
-        # btn_z: BOT_THICK 17 的中央偏下 (BOT_THICK/2 - 1)
-        btn_z = BOT_THICK / 2 - 1.0
+        # === 3 按钮孔 (穿透 -X 侧壁) Z 中心向上移到 PCB 板载按钮高度对齐 ===
+        # PCB 顶面 z = BOT_THICK - PCB_T; SMT 按钮中心距 PCB 顶 ≈ 3mm
+        # 所以 btn_z ≈ BOT_THICK - PCB_T - 3 = 21 - 1.2 - 3 ≈ 16.8 (上移到偏顶部)
+        # 实际取 BOT_THICK - 5 = 16 保留容差
+        btn_z = BOT_THICK - 5.0
         # 按钮本体方坑 (从外壁向内挖 BTN_BODY_DEPTH mm, 嵌入 6.2x6.2 按钮)
         with BuildSketch(Plane.YZ.offset(-(CASE_W / 2 + 0.1))):
             for ly in BTN_Y_LOCS:
@@ -342,6 +344,12 @@ def make_bottom():
 
 
 if __name__ == "__main__":
+    import os, subprocess
+    from build123d import export_stl, export_step
+    here = os.path.dirname(os.path.abspath(__file__))
+    case_dir = os.path.normpath(os.path.join(here, "..", "case"))
+    os.makedirs(case_dir, exist_ok=True)
+
     top = make_top()
     bot = make_bottom()
     print("=== TOP ===")
@@ -350,3 +358,21 @@ if __name__ == "__main__":
     print("=== BOTTOM ===")
     print(f"Volume: {bot.volume:.0f} mm³")
     print(f"BBox: {bot.bounding_box().size}")
+
+    top_step = os.path.join(case_dir, "top_cover.step")
+    bot_step = os.path.join(case_dir, "bottom_case.step")
+    top_stl  = os.path.join(case_dir, "top_cover.stl")
+    bot_stl  = os.path.join(case_dir, "bottom_case.stl")
+    export_step(top, top_step)
+    export_step(bot, bot_step)
+    export_stl(top, top_stl)
+    export_stl(bot, bot_stl)
+    print(f"导出: {top_step}\n      {bot_step}\n      {top_stl}\n      {bot_stl}")
+
+    # 用 bambu-3mf skill 转 Bambu Studio 兼容 3MF
+    skill_stl_to_3mf = os.path.expanduser("~/.claude/skills/bambu-3mf/scripts/stl_to_3mf.py")
+    if os.path.exists(skill_stl_to_3mf):
+        for stl, name in [(top_stl, "top_cover"), (bot_stl, "bottom_case")]:
+            three_mf = os.path.join(case_dir, f"{name}.3mf")
+            subprocess.run(["python3", skill_stl_to_3mf, stl, three_mf], check=True)
+            print(f"3MF: {three_mf}")
