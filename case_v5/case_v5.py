@@ -361,6 +361,87 @@ def make_bottom():
     return p
 
 
+def make_tpu_bumper():
+    """
+    TPU 软质保护套, 包裹 top+bottom 完整组件 (CASE_W × CASE_H × CASE_Z)
+    - 单边 TPU_OUT=2.5mm 外推
+    - 内腔比外壳大 TPU_GAP=0.3mm 单边, 利用 TPU 弹性套入
+    - 顶面开屏幕窗 (露 SCREEN + 2mm 边距)
+    - 底面开无线充电窗 (圆形, 直径 ≥ WIRELESS_COIL_OD)
+    - -X 侧 3 个按钮圆孔, +X 侧 1 个传感器圆孔
+    - ±Y 端完全开口让表带耳 + 弹簧棒 + 表带穿出 (Apple Watch 风格)
+    - 整个外形圆角加大, 视觉柔和
+    """
+    TPU_OUT  = 2.5     # 单边 TPU 厚
+    TPU_GAP  = 0.3     # 内腔单边间隙, 利用弹性套入
+    BTN_HOLE = 5.5     # 按钮孔直径 (BTN_HOLE_SIDE + 1)
+    SENS_HOLE = 4.6    # 传感器孔直径 (PRESS_SENSOR_D + 1)
+    SCR_WIN_M = 2.0    # 屏幕窗四周边距 (相对 SCREEN)
+    CHG_WIN_R = WIRELESS_COIL_OD / 2 + 1   # 充电窗半径
+    STRAP_OPEN = STRAP_WIDTH + 4           # ±Y 端开口宽度 (露耳片+表带)
+
+    out_w  = CASE_W + 2 * TPU_OUT
+    out_h  = CASE_H + 2 * TPU_OUT
+    out_z  = CASE_Z + 2 * TPU_OUT
+    in_w   = CASE_W + 2 * TPU_GAP
+    in_h   = CASE_H + 2 * TPU_GAP
+    in_z   = CASE_Z + 2 * TPU_GAP
+    tpu_corner = CORNER_R + TPU_OUT + 1.0
+
+    with BuildPart() as bumper:
+        # 外形 (大圆角)
+        with BuildSketch():
+            RectangleRounded(out_w, out_h, tpu_corner)
+        extrude(amount=out_z)
+        # 减内腔 (与 case 同形状 + 0.3mm 单边间隙)
+        # case 实际占 z = 0..CASE_Z, 在 bumper 中居中: z = TPU_OUT..TPU_OUT+CASE_Z
+        # 内腔做 z = TPU_OUT - TPU_GAP .. TPU_OUT + CASE_Z + TPU_GAP
+        with BuildSketch(Plane.XY.offset(TPU_OUT - TPU_GAP)):
+            RectangleRounded(in_w, in_h, CORNER_R + TPU_GAP)
+        extrude(amount=in_z, mode=Mode.SUBTRACT)
+
+        # 屏幕窗 (顶面 -Z 削穿 TPU 顶皮)
+        scr_w = SCREEN_W + 2 * SCR_WIN_M
+        scr_h = SCREEN_H + 2 * SCR_WIN_M
+        with BuildSketch(Plane.XY.offset(out_z + 0.05)):
+            RectangleRounded(scr_w, scr_h, 3.5)
+        extrude(amount=-(TPU_OUT + 1.0), mode=Mode.SUBTRACT)
+
+        # 无线充电窗 (底面圆孔)
+        with BuildSketch(Plane.XY.offset(-0.05)):
+            Circle(CHG_WIN_R)
+        extrude(amount=TPU_OUT + 1.0, mode=Mode.SUBTRACT)
+
+        # ±Y 端开口 (表带耳穿出)
+        # 在 ±Y 端各挖 STRAP_OPEN(宽 X) × out_z(高 Z) 矩形通孔
+        for sy in (-1, 1):
+            with BuildSketch(Plane.XZ.offset(sy * (out_h / 2 + 0.1))):
+                Rectangle(STRAP_OPEN, out_z + 2)
+            extrude(amount=TPU_OUT * 2 + 4, mode=Mode.SUBTRACT)
+
+        # -X 侧 3 按钮圆孔
+        # case 中 btn_z 是相对 case Z 原点; bumper 中 case 位于 z=TPU_OUT..TPU_OUT+CASE_Z
+        btn_z_tpu = TPU_OUT + (BOT_THICK / 2.0)   # 与 make_bottom 中 btn_z 一致
+        for ly in BTN_Y_LOCS:
+            with BuildSketch(Plane.YZ.offset(-(out_w / 2 + 0.1))):
+                with Locations((ly, btn_z_tpu)):
+                    Circle(BTN_HOLE / 2)
+            extrude(amount=out_w + 0.2, mode=Mode.SUBTRACT)
+
+        # +X 侧 传感器孔 (与 make_bottom sensor 位置一致)
+        press_cz_tpu = TPU_OUT + (BOT_THICK / 2.0)
+        sensor_cy_tpu = PRESS_CENTER_Y + (PRESS_PCB_H / 2 - PRESS_SENSOR_EDGE_MARGIN)
+        sensor_cz_tpu = press_cz_tpu + (PRESS_PCB_W / 2 - PRESS_SENSOR_EDGE_MARGIN)
+        with BuildSketch(Plane.YZ.offset(out_w / 2 + 0.1)):
+            with Locations((sensor_cy_tpu, sensor_cz_tpu)):
+                Circle(SENS_HOLE / 2)
+        extrude(amount=-(out_w + 0.2), mode=Mode.SUBTRACT)
+
+    p = bumper.part
+    p.label = "tpu_bumper"
+    return p
+
+
 if __name__ == "__main__":
     import os, subprocess
     from build123d import export_stl, export_step
@@ -370,27 +451,27 @@ if __name__ == "__main__":
 
     top = make_top()
     bot = make_bottom()
+    tpu = make_tpu_bumper()
     print("=== TOP ===")
-    print(f"Volume: {top.volume:.0f} mm³")
-    print(f"BBox: {top.bounding_box().size}")
+    print(f"Volume: {top.volume:.0f} mm³, BBox: {top.bounding_box().size}")
     print("=== BOTTOM ===")
-    print(f"Volume: {bot.volume:.0f} mm³")
-    print(f"BBox: {bot.bounding_box().size}")
+    print(f"Volume: {bot.volume:.0f} mm³, BBox: {bot.bounding_box().size}")
+    print("=== TPU BUMPER ===")
+    print(f"Volume: {tpu.volume:.0f} mm³, BBox: {tpu.bounding_box().size}")
 
-    top_step = os.path.join(case_dir, "top_cover.step")
-    bot_step = os.path.join(case_dir, "bottom_case.step")
-    top_stl  = os.path.join(case_dir, "top_cover.stl")
-    bot_stl  = os.path.join(case_dir, "bottom_case.stl")
-    export_step(top, top_step)
-    export_step(bot, bot_step)
-    export_stl(top, top_stl)
-    export_stl(bot, bot_stl)
-    print(f"导出: {top_step}\n      {bot_step}\n      {top_stl}\n      {bot_stl}")
-
-    # 用 bambu-3mf skill 转 Bambu Studio 兼容 3MF
+    outs = [
+        ("top_cover",   top),
+        ("bottom_case", bot),
+        ("tpu_bumper",  tpu),
+    ]
     skill_stl_to_3mf = os.path.expanduser("~/.claude/skills/bambu-3mf/scripts/stl_to_3mf.py")
-    if os.path.exists(skill_stl_to_3mf):
-        for stl, name in [(top_stl, "top_cover"), (bot_stl, "bottom_case")]:
-            three_mf = os.path.join(case_dir, f"{name}.3mf")
-            subprocess.run(["python3", skill_stl_to_3mf, stl, three_mf], check=True)
-            print(f"3MF: {three_mf}")
+    for name, part in outs:
+        step_p = os.path.join(case_dir, f"{name}.step")
+        stl_p  = os.path.join(case_dir, f"{name}.stl")
+        export_step(part, step_p)
+        export_stl(part, stl_p)
+        print(f"导出 {step_p}, {stl_p}")
+        if os.path.exists(skill_stl_to_3mf):
+            tmf = os.path.join(case_dir, f"{name}.3mf")
+            subprocess.run(["python3", skill_stl_to_3mf, stl_p, tmf], check=True)
+            print(f"3MF: {tmf}")
