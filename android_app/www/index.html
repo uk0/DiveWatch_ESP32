@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d0f12">
+<title>DiveWatch</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ============ 主页 ============ -->
+<section class="page" id="page-home">
+  <header class="topbar">
+    <div class="brand">Dive<span>Watch</span></div>
+    <button id="btnConn" class="pill"><span class="dot"></span><span id="connText">未连接</span></button>
+  </header>
+
+  <main>
+    <div class="hero">
+      <div class="hero-label">电池</div>
+      <div class="hero-value"><span id="batPct">—</span><small>%</small></div>
+    </div>
+
+    <div class="cards-grid">
+      <div class="mini">
+        <div class="mini-label">深度</div>
+        <div class="mini-value" id="depthVal">—<small>m</small></div>
+      </div>
+      <div class="mini">
+        <div class="mini-label">温度</div>
+        <div class="mini-value" id="tempVal">—<small>°</small></div>
+      </div>
+      <div class="mini">
+        <div class="mini-label">WiFi</div>
+        <div class="mini-value mini-text" id="wifiVal">—</div>
+      </div>
+      <div class="mini">
+        <div class="mini-label">IP</div>
+        <div class="mini-value mini-text" id="ipVal">—</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>深度实时曲线 <small id="liveCnt">0 点</small></h3>
+      <canvas id="liveChart" height="180"></canvas>
+    </div>
+
+    <div class="card">
+      <h3>潜水统计 <small>本地</small></h3>
+      <div class="stat-row">
+        <div><span class="num" id="totalDives">0</span><span class="lbl">总次数</span></div>
+        <div><span class="num" id="maxDepth">0.0</span><span class="lbl">最深 m</span></div>
+        <div><span class="num" id="totalMin">0</span><span class="lbl">总时长 分</span></div>
+      </div>
+    </div>
+  </main>
+</section>
+
+<!-- ============ 日志页 ============ -->
+<section class="page hidden" id="page-log">
+  <header class="topbar">
+    <div class="brand">潜水日志</div>
+    <button id="btnLogClear" class="pill danger">清空</button>
+  </header>
+  <main>
+    <div class="card">
+      <h3>累计次数趋势</h3>
+      <canvas id="histChart" height="180"></canvas>
+    </div>
+    <div class="card">
+      <h3>记录列表 <small id="diveCount">0 条</small></h3>
+      <div id="diveList" class="dive-list"></div>
+    </div>
+  </main>
+</section>
+
+<!-- ============ 工具页 ============ -->
+<section class="page hidden" id="page-tool">
+  <header class="topbar"><div class="brand">工具</div></header>
+  <main>
+    <div class="card">
+      <h3>蓝牙</h3>
+      <div class="btn-row">
+        <button id="btnScan" class="btn primary">扫描连接</button>
+        <button id="btnDisc" class="btn ghost" disabled>断开</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>WiFi 配置</h3>
+      <div class="field">
+        <label>SSID</label>
+        <input id="inpSsid" class="input" placeholder="网络名称">
+      </div>
+      <div class="field">
+        <label>密码</label>
+        <input id="inpPsk" class="input" type="password" placeholder="WiFi 密码">
+      </div>
+      <div class="btn-row three">
+        <button id="btnWifiConn" class="btn primary" disabled>连接</button>
+        <button id="btnWifiForget" class="btn ghost" disabled>清除</button>
+        <button id="btnReboot" class="btn ghost" disabled>重启</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>固件 OTA (WiFi)</h3>
+      <div class="field">
+        <label>设备 IP</label>
+        <input id="inpIp" class="input" placeholder="设备 IP">
+      </div>
+      <div class="field">
+        <button class="btn block file-input">
+          <span id="fileLbl">选择 .bin 文件</span>
+          <input id="inpFile" type="file" accept=".bin">
+        </button>
+        <div class="hint" id="fileName"></div>
+      </div>
+      <div class="progress"><div id="otaBar"></div></div>
+      <div class="hint flex" style="justify-content:space-between">
+        <span id="otaPct">0%</span><span id="otaSize">—</span>
+      </div>
+      <button id="btnOta" class="btn primary block" disabled style="margin-top:12px">推送固件</button>
+    </div>
+
+    <div class="card">
+      <h3>日志 <small>实时</small></h3>
+      <div id="log" class="log"></div>
+    </div>
+
+    <div class="card">
+      <h3>关于</h3>
+      <div class="kv"><span>设备</span><span id="aboutDev">—</span></div>
+      <div class="kv"><span>服务</span><span class="mono">SVC ovr OTA</span></div>
+      <div class="kv"><span>App</span><span>DiveWatch 1.0.0</span></div>
+    </div>
+  </main>
+</section>
+
+<!-- ============ 底部 tab ============ -->
+<nav class="tabs">
+  <button class="tab active" data-page="home">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/></svg>
+    <span>主页</span>
+  </button>
+  <button class="tab" data-page="log">
+    <svg viewBox="0 0 24 24"><polyline points="3,18 9,12 13,16 21,6"/></svg>
+    <span>日志</span>
+  </button>
+  <button class="tab" data-page="tool">
+    <svg viewBox="0 0 24 24"><path d="M14 3l-1 1 6 6 1-1zM3 21l4-1 10-10-3-3L4 17z"/></svg>
+    <span>工具</span>
+  </button>
+</nav>
+
+<div class="toast-host"><div id="toast" class="toast"></div></div>
+
+<script src="bundle.js"></script>
+</body>
+</html>

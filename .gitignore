@@ -30,3 +30,13 @@ build/
 
 # OS
 Thumbs.db
+
+# Capacitor / Android
+android_app/node_modules/
+android_app/android/build/
+android_app/android/.gradle/
+android_app/android/app/build/
+android_app/android/local.properties
+android_app/www/bundle.js
+android_app/icon/
+*.apk

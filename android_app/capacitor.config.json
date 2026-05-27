@@ -1,0 +1,18 @@
+{
+  "appId": "com.divewatch.app",
+  "appName": "DiveWatch",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": true
+  },
+  "plugins": {
+    "BluetoothLe": {
+      "displayStrings": {
+        "scanning": "扫描蓝牙设备…",
+        "cancel": "取消",
+        "availableDevices": "可用设备",
+        "noDeviceFound": "未找到设备"
+      }
+    }
+  }
+}
