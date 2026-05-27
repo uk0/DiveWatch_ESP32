@@ -116,6 +116,14 @@ input { user-select: text; -webkit-user-select: text; }
   text-transform: uppercase; letter-spacing: 0.5px;
 }
 
+/* ============ 图表容器 (固定高度防 canvas 无限增长) ============ */
+.chart-wrap {
+  position: relative;
+  height: 180px;
+  width: 100%;
+}
+.chart-wrap canvas { display: block; }
+
 /* ============ 统计行 ============ */
 .stat-row {
   display: grid; grid-template-columns: 1fr 1fr 1fr;
