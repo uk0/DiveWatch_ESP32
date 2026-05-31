@@ -24,6 +24,9 @@ from build123d import (
 # ===== 屏幕 & PCB =====
 SCREEN_W   = 44.0   # 显示区宽 (X)
 SCREEN_H   = 60.6   # 显示区高 (Y)
+SCREEN_LIP_W = 1.5  # 屏幕窗顶部一圈 lip 宽 (单边内推, 卡住屏幕不上掉)
+SCREEN_LIP_H = 1.0  # lip 厚度 (从顶面往下)
+SCREEN_FIT   = 0.6  # 屏幕装入间隙 (下层装屏窗每边比 SCREEN 大 0.3mm)
 SCREEN_T   = 2.5    # 显示区厚
 
 PCB_W      = 45.0   # 屏 PCB 宽 (X)
@@ -86,9 +89,9 @@ CORNER_R   = 4.0
 # PCB 周边: WALL(2.5) + SEAL_INSET(2) + SEAL_GROOVE_W(3) + 余量(0.5) = 8mm
 CASE_W     = PCB_W + 2 * (WALL + 4.0)             # 45 + 13 = 58
 CASE_H     = PCB_H + 2 * (WALL + 4.0)             # 73.5 + 13 = 86.5
-CASE_Z     = 26.0                                  # 总厚 22→26 (+4 给电池/无线充线圈余量)
-TOP_THICK  = 5.0                                   # 顶盖含 PCB pocket + FPC 槽
-BOT_THICK  = CASE_Z - TOP_THICK                    # 下底厚 = 21.0 (内腔 ≈18.5mm 装电池+线圈)
+CASE_Z     = 28.0                                  # 总厚 26→28 (+2 顶盖加厚装屏幕 lip)
+TOP_THICK  = 7.0                                   # 顶盖 5→7 (+2 加屏幕 lip 卡住屏幕不掉)
+BOT_THICK  = CASE_Z - TOP_THICK                    # 下底厚 = 21.0 (不变, 内腔仍 ≈18.5mm)
 
 # ============================================================
 # 防水密封: 上下盖凹凸契合结构 + O 圈
@@ -149,12 +152,19 @@ def make_top():
             RectangleRounded(CASE_W, CASE_H, CORNER_R)
         extrude(amount=TOP_THICK)
 
-        # 屏幕窗口 (顶面镂空到 PCB 沉槽底)
-        # PCB 在顶盖内部沉槽 (深 PCB_T = 1.2)
-        # 显示区从顶面挖到外
+        # === 屏幕窗 两阶: 顶层缩口 lip 卡屏, 下层全尺寸+间隙装入 ===
+        # 顶层 (z=TOP_THICK-SCREEN_LIP_H .. TOP_THICK): 露屏 = SCREEN - 2×LIP_W
+        scr_top_w = SCREEN_W - 2 * SCREEN_LIP_W
+        scr_top_h = SCREEN_H - 2 * SCREEN_LIP_W
+        with BuildSketch(Plane.XY.offset(TOP_THICK - SCREEN_LIP_H)):
+            Rectangle(scr_top_w, scr_top_h)
+        extrude(amount=SCREEN_LIP_H + 0.1, mode=Mode.SUBTRACT)
+        # 下层 (z=0 .. TOP_THICK-SCREEN_LIP_H): 屏幕装入腔 = SCREEN + FIT
+        scr_fit_w = SCREEN_W + SCREEN_FIT
+        scr_fit_h = SCREEN_H + SCREEN_FIT
         with BuildSketch(Plane.XY.offset(0)):
-            Rectangle(SCREEN_W, SCREEN_H)
-        extrude(amount=TOP_THICK, mode=Mode.SUBTRACT)
+            Rectangle(scr_fit_w, scr_fit_h)
+        extrude(amount=TOP_THICK - SCREEN_LIP_H + 0.05, mode=Mode.SUBTRACT)
 
         # PCB 沉槽 (从底面挖, 让 PCB 嵌入顶盖)
         pcb_pocket_w = PCB_W + 0.4         # 45.4
