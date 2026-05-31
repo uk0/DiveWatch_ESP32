@@ -221,7 +221,7 @@ def make_top():
         CLIP_W   = 4.0    # 沿壁面方向宽度
         CLIP_D   = 0.5    # 向内突出深度 (沉槽单边间隙 0.2, 凸起 0.5 形成过盈卡扣)
         CLIP_H   = 1.0    # Z 方向高度
-        clip_z   = pcb_ledge_z + 0.2   # 台阶上方 0.2mm 处, 在沉槽内
+        clip_z   = pcb_ledge_z + 0.8   # 台阶 + PCB 厚 0.6 + 0.2 间隙, 凸起压住 PCB 顶面
         # ±X 两边 (PCB 沉槽短边中点)
         for sx in (-1, 1):
             cx = sx * (pcb_pocket_w / 2 - CLIP_D / 2)
