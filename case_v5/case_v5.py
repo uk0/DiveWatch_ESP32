@@ -88,8 +88,8 @@ CORNER_R   = 4.0
 # PCB 周边: WALL(2.5) + SEAL_INSET(2) + SEAL_GROOVE_W(3) + 余量(0.5) = 8mm
 CASE_W     = PCB_W + 2 * (WALL + 4.0)             # 45 + 13 = 58
 CASE_H     = PCB_H + 2 * (WALL + 4.0)             # 73.5 + 13 = 86.5
-CASE_Z     = 30.0                                  # 总厚 28→30 (+2 装配空间)
-TOP_THICK  = 9.0                                   # 顶盖 7→9 (+2 装配余量全给 top)
+CASE_Z     = 28.0                                  # 总厚 (参考版 26 + 2 装配)
+TOP_THICK  = 7.0                                   # 顶盖 (参考版 5 + 2 装配)
 BOT_THICK  = CASE_Z - TOP_THICK                    # 下底厚 = 21.0 (不变)
 
 # ============================================================
