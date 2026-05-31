@@ -88,9 +88,9 @@ CORNER_R   = 4.0
 # PCB 周边: WALL(2.5) + SEAL_INSET(2) + SEAL_GROOVE_W(3) + 余量(0.5) = 8mm
 CASE_W     = PCB_W + 2 * (WALL + 4.0)             # 45 + 13 = 58
 CASE_H     = PCB_H + 2 * (WALL + 4.0)             # 73.5 + 13 = 86.5
-CASE_Z     = 28.0                                  # 总厚 26→28 (+2 顶盖加厚装屏幕 lip)
-TOP_THICK  = 7.0                                   # 顶盖 5→7 (+2 加屏幕 lip 卡住屏幕不掉)
-BOT_THICK  = CASE_Z - TOP_THICK                    # 下底厚 = 21.0 (不变, 内腔仍 ≈18.5mm)
+CASE_Z     = 30.0                                  # 总厚 28→30 (+2 装配空间)
+TOP_THICK  = 9.0                                   # 顶盖 7→9 (+2 装配余量全给 top)
+BOT_THICK  = CASE_Z - TOP_THICK                    # 下底厚 = 21.0 (不变)
 
 # ============================================================
 # 防水密封: 上下盖凹凸契合结构 + O 圈
@@ -191,6 +191,28 @@ def make_top():
             with Locations(*SCREW_LOCS):
                 Circle(SCREW_HEAD_D / 2)
         extrude(amount=SCREW_HEAD_DEPTH + 0.1, mode=Mode.SUBTRACT)
+
+        # === 4 个小凸起卡住屏幕 (屏幕窗腔内壁四边中点, 向内突出) ===
+        # 凸起位于下层 PCB 腔内, 从腔壁向内突出 0.8mm, 防屏幕沿 XY 方向晃动
+        # 屏幕装入时轻推过凸起 (TPU/树脂均有微弹性), 卡入后被凸起锁住
+        CLIP_W   = 3.0    # 凸起沿壁面方向宽度
+        CLIP_D   = 0.8    # 向内突出深度
+        CLIP_H   = 2.0    # 凸起高度 (Z 方向)
+        clip_z   = TOP_THICK - SCREEN_LIP_H - CLIP_H  # 紧贴 lip 下方
+        # ±X 两边 (屏幕短边中点): 从 PCB 腔壁 (±pcb_pocket_w/2) 向内突出
+        for sx in (-1, 1):
+            cx = sx * (pcb_pocket_w / 2 - CLIP_D / 2)
+            with BuildSketch(Plane.XY.offset(clip_z)):
+                with Locations((cx, 0)):
+                    Rectangle(CLIP_D, CLIP_W)
+            extrude(amount=CLIP_H, mode=Mode.ADD)
+        # ±Y 两边 (屏幕长边中点)
+        for sy in (-1, 1):
+            cy = sy * (pcb_pocket_h / 2 - CLIP_D / 2)
+            with BuildSketch(Plane.XY.offset(clip_z)):
+                with Locations((0, cy)):
+                    Rectangle(CLIP_W, CLIP_D)
+            extrude(amount=CLIP_H, mode=Mode.ADD)
 
     p = top.part
     p.label = "top_cover"
