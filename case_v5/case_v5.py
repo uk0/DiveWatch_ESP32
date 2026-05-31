@@ -145,35 +145,48 @@ PRESS_CZ_FROM_BOT = BOT_THICK - 5.0   # 离顶面 5mm 高位置 (装在主板对
 # 顶盖
 # ============================================================
 def make_top():
+    """
+    顶盖结构 (z=0 显示面朝外, z=TOP_THICK 装配面朝 bottom):
+      z=0 ─────────── 显示面 (屏幕玻璃从此面露出)
+      │  屏幕窗贯穿 (SCREEN_W × SCREEN_H)
+      │  z=1..3: 4 个凸起卡屏 (防从正面脱出)
+      z=5.5 ─────── PCB 沉槽顶 (天然台阶: PCB 边缘搁在此处)
+      │  PCB 沉槽 (PCB_W+0.4 × PCB_H+0.4, 深 1.5mm)
+      │  FPC 排线槽 (22×5, 比沉槽再深 2.5mm)
+      z=7 ─────────── 装配面 (朝向 bottom, 密封槽 + 螺丝在此面)
+    """
     with BuildPart() as top:
         # 主体
         with BuildSketch():
             RectangleRounded(CASE_W, CASE_H, CORNER_R)
         extrude(amount=TOP_THICK)
 
-        # === 屏幕窗 + PCB 模组腔: 顶层 lip 卡屏, 下层贯穿底面装入 ===
-        # 顶层 lip (z=TOP_THICK-SCREEN_LIP_H .. TOP_THICK): 露屏 = SCREEN - 2×LIP_W
-        #   屏幕模组从底面 (z=0) 装入, 玻璃面朝顶, 四周边框被这圈 lip 压住 → 不掉出
-        scr_lip_w = SCREEN_W - 2 * SCREEN_LIP_W   # 41.0
-        scr_lip_h = SCREEN_H - 2 * SCREEN_LIP_W   # 57.6
-        with BuildSketch(Plane.XY.offset(TOP_THICK - SCREEN_LIP_H)):
-            Rectangle(scr_lip_w, scr_lip_h)
-        extrude(amount=SCREEN_LIP_H + 0.1, mode=Mode.SUBTRACT)
-        # 下层 PCB 模组腔 (z=0 .. TOP_THICK-SCREEN_LIP_H): 贯穿底面, 装 PCB+屏幕模组
-        #   腔深 = TOP_THICK - SCREEN_LIP_H = 6mm; 模组厚 ~2.8mm → 内部余 ~3mm 空间
+        # 1. 屏幕窗口 (贯穿): 显示面 z=0 到装配面 z=TOP_THICK
+        with BuildSketch(Plane.XY.offset(0)):
+            Rectangle(SCREEN_W, SCREEN_H)
+        extrude(amount=TOP_THICK, mode=Mode.SUBTRACT)
+
+        # 2. PCB 沉槽 (从装配面挖): PCB 比屏幕大, 形成天然台阶卡住屏幕
         pcb_pocket_w = PCB_W + 0.4         # 45.4
         pcb_pocket_h = PCB_H + 0.4         # 73.9
-        with BuildSketch(Plane.XY.offset(0)):
+        pcb_pocket_d = PCB_T + 0.3         # 1.5
+        with BuildSketch(Plane.XY.offset(TOP_THICK - pcb_pocket_d)):
             Rectangle(pcb_pocket_w, pcb_pocket_h)
-        extrude(amount=TOP_THICK - SCREEN_LIP_H + 0.05, mode=Mode.SUBTRACT)
+        extrude(amount=pcb_pocket_d + 0.1, mode=Mode.SUBTRACT)
 
-        # === 密封 U 形凹槽 (顶面 z=TOP_THICK 向下挖, 与 PCB 装入面同侧) ===
-        # PCB 从顶面 z=5 装入 pocket, 凹槽也在顶面 → 装配时这一面朝向 bottom
+        # 3. FPC 排线槽 (比 PCB 沉槽再深 2.5mm, 在 PCB 短边一端中央)
+        flex_total_depth = pcb_pocket_d + PCB_FLEX_DEPTH
+        flex_cy = PCB_FLEX_END * (pcb_pocket_h / 2 - PCB_FLEX_LEN_Y / 2 - 0.5)
+        with BuildSketch(Plane.XY.offset(TOP_THICK - flex_total_depth)):
+            with Locations((0, flex_cy)):
+                Rectangle(PCB_FLEX_LEN_X, PCB_FLEX_LEN_Y)
+        extrude(amount=flex_total_depth + 0.1, mode=Mode.SUBTRACT)
+
+        # 4. 密封 U 形凹槽 (装配面挖, 对接 bottom 凸起)
         groove_out_w = CASE_W - 2 * SEAL_INSET
         groove_out_h = CASE_H - 2 * SEAL_INSET
         groove_in_w  = groove_out_w - 2 * SEAL_GROOVE_W
         groove_in_h  = groove_out_h - 2 * SEAL_GROOVE_W
-        # 从 z=TOP_THICK-SEAL_GROOVE_D 向上挖到 z=TOP_THICK (顶面开口)
         with BuildSketch(Plane.XY.offset(TOP_THICK - SEAL_GROOVE_D)):
             RectangleRounded(groove_out_w, groove_out_h,
                               max(CORNER_R - SEAL_INSET, 0.5))
@@ -182,7 +195,7 @@ def make_top():
                               mode=Mode.SUBTRACT)
         extrude(amount=SEAL_GROOVE_D + 0.1, mode=Mode.SUBTRACT)
 
-        # 4 角螺丝沉头孔
+        # 5. 4 角螺丝沉头孔
         with BuildSketch():
             with Locations(*SCREW_LOCS):
                 Circle(SCREW_THRU_D / 2)
@@ -192,23 +205,23 @@ def make_top():
                 Circle(SCREW_HEAD_D / 2)
         extrude(amount=SCREW_HEAD_DEPTH + 0.1, mode=Mode.SUBTRACT)
 
-        # === 4 个小凸起卡住屏幕 (屏幕窗腔内壁四边中点, 向内突出) ===
-        # 凸起位于下层 PCB 腔内, 从腔壁向内突出 0.8mm, 防屏幕沿 XY 方向晃动
-        # 屏幕装入时轻推过凸起 (TPU/树脂均有微弹性), 卡入后被凸起锁住
-        CLIP_W   = 3.0    # 凸起沿壁面方向宽度
+        # 6. 4 个小凸起卡屏 (屏幕窗内壁, 近显示面)
+        #    屏幕从装配面装入, 玻璃穿过窗口, 这 4 个凸起从内壁伸出挡住屏幕
+        #    位于 z=1..3 (显示面一侧), 远离 PCB 沉槽 (z=5.5..7)
+        CLIP_W   = 3.0    # 沿壁面方向宽度
         CLIP_D   = 0.8    # 向内突出深度
-        CLIP_H   = 2.0    # 凸起高度 (Z 方向)
-        clip_z   = TOP_THICK - SCREEN_LIP_H - CLIP_H  # 紧贴 lip 下方
-        # ±X 两边 (屏幕短边中点): 从 PCB 腔壁 (±pcb_pocket_w/2) 向内突出
+        CLIP_H   = 2.0    # Z 方向高度
+        clip_z   = 1.0    # 距显示面 1mm 处开始
+        # ±X 两边 (屏幕窗短边中点)
         for sx in (-1, 1):
-            cx = sx * (pcb_pocket_w / 2 - CLIP_D / 2)
+            cx = sx * (SCREEN_W / 2 - CLIP_D / 2)
             with BuildSketch(Plane.XY.offset(clip_z)):
                 with Locations((cx, 0)):
                     Rectangle(CLIP_D, CLIP_W)
             extrude(amount=CLIP_H, mode=Mode.ADD)
-        # ±Y 两边 (屏幕长边中点)
+        # ±Y 两边 (屏幕窗长边中点)
         for sy in (-1, 1):
-            cy = sy * (pcb_pocket_h / 2 - CLIP_D / 2)
+            cy = sy * (SCREEN_H / 2 - CLIP_D / 2)
             with BuildSketch(Plane.XY.offset(clip_z)):
                 with Locations((0, cy)):
                     Rectangle(CLIP_W, CLIP_D)
