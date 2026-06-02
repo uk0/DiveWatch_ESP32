@@ -4,8 +4,8 @@
 
 | 项目 | 值 |
 |---|---|
-| 主控芯片 | ESP32-S3R8 (双核 240MHz, 8MB Flash, 8MB PSRAM) |
-| 开发板名称 | ESP32-S3-Nano (类似 Arduino Nano 尺寸) |
+| 主控芯片 | ESP32-S3 (双核 240MHz, 4MB Flash, 8MB PSRAM) |
+| 开发板名称 | ESP32-S3-Nano (Arduino Nano 形态) |
 | 板载接口 | USB-C (兼容 OTG + CDC) |
 | 工作电压 | 3.3V |
 | 板载稳压 | 5V → 3.3V LDO |
@@ -13,10 +13,10 @@
 | 通讯接口 | UART × 1, I²C × 1, SPI × 1, USB-CDC × 1 |
 | ADC | 12-bit, 多通道 (GPIO 1-10 可作 ADC) |
 | Arduino-ESP32 核心 | 3.3.8 |
-| FQBN | `esp32:esp32:esp32s3:PartitionScheme=huge_app,CDCOnBoot=cdc` |
-| 分区方案 | huge_app (3MB APP / 1MB SPIFFS, 单分区无 OTA) |
-| Sketch 大小 | ~1.75 MB (占 55% 可用空间) |
-| RAM 使用 | ~47 KB (14% 动态内存) |
+| FQBN | `esp32:esp32:esp32s3:PartitionScheme=min_spiffs,CDCOnBoot=cdc` |
+| 分区方案 | min_spiffs (1.94MB × 2 OTA slot + 128KB SPIFFS) |
+| Sketch 大小 | ~1.84 MB (占 93% 单 slot) |
+| RAM 使用 | ~80 KB |
 | 烧录波特率 | 921600 baud |
 
 ### CPU 频率档位 (代码 130-131 行)

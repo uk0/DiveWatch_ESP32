@@ -1,42 +1,57 @@
+# --- Claude Code dev workspace (LOCAL ONLY — never push) ---
 CLAUDE.md
-*_article
-.idea/
-.DS_Store
 .claude/
-proxy/
+docs/
+
+# --- IDE / OS noise ---
+.idea/
+.vscode/
+.DS_Store
+
+# --- Secrets / credentials ---
 .env
 .env.*
-docs/
+proxy/
+
+# --- User data / sessions ---
+userdata/
+session/
+
+# --- Personal documents and exports ---
+*_article
 *.docx
 *.doc
 *.xlsx
 *.csv
-userdata/
-session/
 
-# PlatformIO
-.pio/
-.pioenvs/
-.piolibdeps/
-.vscode/
-.clang_complete
-.gcc-flags.json
-
-# Arduino IDE
-build/
-*.hex
+# --- Arduino IDE build cache ---
+arduino/*/build/
 *.elf
-*.bin
+*.hex
 
-# OS
-Thumbs.db
-
-# Capacitor / Android
+# --- Capacitor / Android App ---
 android_app/node_modules/
 android_app/android/build/
 android_app/android/.gradle/
 android_app/android/app/build/
 android_app/android/local.properties
+android_app/android/captures/
 android_app/www/bundle.js
 android_app/icon/
+
+# --- CAD intermediate ---
+case_v5/__pycache__/
+case_v5/build/
+case/.*.glb
+build/
 *.apk
+
+# --- PlatformIO ---
+.pio/
+.pioenvs/
+.piolibdeps/
+.clang_complete
+.gcc-flags.json
+
+# --- GPT-image cache ---
+app/gen_image/
