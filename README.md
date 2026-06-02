@@ -15,6 +15,15 @@
   <a href="LICENSE">MIT License</a>
 </p>
 
+<p align="center">
+  <img src="photos/hud-with-data.jpg" alt="HUD 主页" width="46%"/>
+  <img src="photos/hud-default.jpg"   alt="HUD 默认"  width="46%"/>
+</p>
+<p align="center">
+  <img src="photos/side-buttons.jpg" alt="3 按钮侧" width="46%"/>
+  <img src="photos/side-sensor.jpg"  alt="压力传感器侧" width="46%"/>
+</p>
+
 ---
 
 > ⚠ **本项目仅供学习娱乐，未经任何潜水认证机构认证。下水必须携带认证潜水电脑或潜水表作为主设备。**

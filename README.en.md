@@ -15,6 +15,15 @@
   <a href="LICENSE">MIT License</a>
 </p>
 
+<p align="center">
+  <img src="photos/hud-with-data.jpg" alt="HUD main"    width="46%"/>
+  <img src="photos/hud-default.jpg"   alt="HUD default" width="46%"/>
+</p>
+<p align="center">
+  <img src="photos/side-buttons.jpg" alt="3 buttons side"  width="46%"/>
+  <img src="photos/side-sensor.jpg"  alt="Pressure sensor side" width="46%"/>
+</p>
+
 ---
 
 > ⚠ **For educational and recreational use only. NOT certified for life-critical applications. Always carry a certified dive computer or dive tables as your primary planning tool when diving.**
