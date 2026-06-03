@@ -451,12 +451,22 @@ def make_tpu_bumper():
             Circle(CHG_WIN_R)
         extrude(amount=TPU_OUT + 1.0, mode=Mode.SUBTRACT)
 
-        # ±Y 端开口 (表带耳穿出)
-        # 在 ±Y 端各挖 STRAP_OPEN(宽 X) × out_z(高 Z) 矩形通孔
+        # ±Y 端开口 (表带耳 + 表带穿出) — 两端对称
+        # bumper 实体 z = 0..out_z, 耳片中心在 z = TPU_OUT + LUG_Z_CENTER
+        # 开口需对准耳片高度, 高度覆盖 LUG_HEIGHT + 余量, 宽度覆盖表带 STRAP_OPEN
+        # 用 XY 平面 sketch 在端部 Y 位置拉伸出 Y 方向的通孔, 避免 XZ 平面法线歧义
+        lug_z_tpu  = TPU_OUT + LUG_Z_CENTER          # 耳片中心 Z (= 2.5 + 10.5 = 13)
+        open_z_lo  = lug_z_tpu - LUG_HEIGHT / 2 - 2   # 开口底
+        open_z_hi  = lug_z_tpu + LUG_HEIGHT / 2 + 2   # 开口顶
+        # 端部 Y 起点: 内腔边缘 (in_h/2) 向外挖穿整个端壁 (到 out_h/2 外)
+        y_inner = in_h / 2 - 1.0      # 从内腔壁内侧一点开始
+        y_outer = out_h / 2 + 1.0     # 挖到外表面外
+        y_len   = y_outer - y_inner
         for sy in (-1, 1):
-            with BuildSketch(Plane.XZ.offset(sy * (out_h / 2 + 0.1))):
-                Rectangle(STRAP_OPEN, out_z + 2)
-            extrude(amount=TPU_OUT * 2 + 4, mode=Mode.SUBTRACT)
+            with BuildSketch(Plane.XY.offset(open_z_lo)):
+                with Locations((0, sy * (y_inner + y_len / 2))):
+                    Rectangle(STRAP_OPEN, y_len)
+            extrude(amount=open_z_hi - open_z_lo, mode=Mode.SUBTRACT)
 
         # -X 侧 3 按钮圆孔
         # case 中 btn_z 是相对 case Z 原点; bumper 中 case 位于 z=TPU_OUT..TPU_OUT+CASE_Z
